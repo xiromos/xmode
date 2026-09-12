@@ -214,18 +214,15 @@ ahci_prdt:
 ; - 1024B Command list
 ; - 256B Received FIS
 ; - 32*256B Command Tables
+; - 64B task list structure
 ; - Alignment (can be used for other information)
 AHCI_MEM_BASE           equ 0x100000
-AHCI_PORT_MEM_OFF       equ 12288        ;1 Command list (1024B), Received FIS (256B), 32 Command Tables (8192B) = 9472 +  ~2.8KB Alignment
+AHCI_PORT_MEM_OFF       equ 12288        ;1 Command list (1024B), Received FIS (256B), 32 Command Tables (8192B), 64B = 9536 +  ~2.7KB Alignment
 CMD_LIST_SIZE            equ 1024
 RECEIVED_FIS_SIZE        equ 256
 CMD_TABLES_SIZE          equ 256
 
-CMD_TABLES              equ 0x108000
-CMD_TABLES_OFFSET       equ 256
-CMD_LISTS               equ 0x100000
-CMD_LIST_OFFSET         equ 1024
-ahci_irq: db 0
+AHCI_TASK_STRUCT_OFF     equ 0x2500
 
 DRIVE_LIST_ADDR        equ 0x8a700     ; ~0x300 (768) bytes
 DRIVE_LIST_ENTRY       equ 100
@@ -244,8 +241,8 @@ ide_found: db 0
 
 
 ohci_base: dd 0
-hcca                    equ 0x102500              ;Host Controller Communications Area, offset 9472B (after 1. AHCI Port Memory Data)
-USB_DEVICE_LIST         equ 0x105500              ;offset 21760B (after 2. AHCI Port Memory Data)
+hcca                    equ 0x162500              ;Host Controller Communications Area
+USB_DEVICE_LIST         equ 0x163000
 OHCI_DRIVER_ADDR        equ 0x61000
 DIR_DRIVERS_ADDR        equ 0x60000
 ;0x00: Unknown
@@ -369,9 +366,9 @@ hidden_sectors: dd 0
 total_sectors32: dd 0
 bytes_per_sec: dw 0
 
-root_start: dw 0
+root_start: dd 0
 root_sectors: dw 0
-data_start: dw 0
+data_start: dd 0
 subdir_entries: dw 0
 
 root_addr       equ 0
@@ -391,7 +388,9 @@ prev_cluster16: dw 0
 drive_number: db 0
 cur_dir_addr: dd 0
 
-read_error_msg: db 'Error while reading file', 0
+no_file_msg: db 'No such file found', 0
+fs16_error_msg: db 'FAT16 ERROR: Failed loading MBR, FAT or Root Directory. Please reboot.', 0x0a, 
+                db 'If this keeps happening, maybe there is something wrong with your drive', 0
 
 del_success_msg: db 'File deleted', 0
 delete_failure_msg: db 'Error while deleting file', 0
@@ -410,7 +409,7 @@ no_dir_str: db 'No such directory', 0
 drive_read_err: db 'Error while reading from the drive', 0
 
 file_test_txt db        "TEST    TXT"
-program_help_bin db     "HELP    BIN"
+program_help_obj db     "HELP    OBJ"
 shell_task_str db       "SHELL   SYS"
 program_init_sys db     "INIT    SYS"
 
@@ -426,6 +425,7 @@ file_ip_sys db          "IP      SYS"
 file_protocol_sys db    "PROTOCOLSYS"
 file_dhcp_sys db        "DHCP    SYS"
 dot_dot_entry db        "..         "
+idle_task_str db        "IDLE    SYS"
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
@@ -478,6 +478,7 @@ tasks_esp:
 tasks_kernel_stack      equ 0x90000
 tasks_kernel_stack_off  equ 0x1000      ;every task has ~4KB stack
 TASK_SIZE               equ 27
+TASK_FLAG_SLEEPING      equ 0x0000b100  ;sleeping flag
 task_limit: db 'Maximum amount of tasks achieved!', 0
 create_task_err: db 'Error while creating task', 0
 
