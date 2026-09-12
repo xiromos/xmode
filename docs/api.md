@@ -161,7 +161,7 @@ Free a heap chunk
 - ESI: pointer to heap chunk
 - ECX: size of allocated memory
 
-Note: If the pointer is wrong or the size is too big, the function will set a Carry Flag. Tasks also cant free other tasks memory
+Note: If the pointer is wrong or the size is too big, the function will set a Carry Flag. Tasks also cant free other tasks memory <br>
       If the tasks terminates without freeing its allocated heap, the terminate_task() function will do that automatically, but it is still recommended to free the heap in the program
 
 ### AH = 0x12
@@ -184,26 +184,89 @@ This is useful if you want to create multiple subtasks in a program. You can pas
 Functions for playing a WAV file
 
 **Subfunctions**:
-  - BH = 0x01: start playing a loaded WAV file
+  - BH = 0x01: start playing a loaded WAV file  <br>
       Input: EDI = startaddress of file
-  - BH = 0x02: pause the playing of current playing WAV file
+  - BH = 0x02: pause the playing of current playing WAV file  <br>
       Output: Carry flag if there currently is no active WAV file
-  - BH = 0x03: resume to play the paused WAV file
+  - BH = 0x03: resume to play the paused WAV file <br>
       Output: Carry flag if there currently is no active WAV file
-  - BH = 0x04: stop completly the play of the current WAV file
-  > When calling function 'BH 0x02' after this function it will set the carry flag because function 0x04 sets status of currently playing a WAV file to 'not active'
+  - BH = 0x04: stop completly the play of the current WAV file  <br>
+  > When calling function 'BH 0x03' after this function it will set the carry flag because function 0x04 sets status of currently playing a WAV file to 'not active'  <br>
   > You should call this function if you want to play another WAV file instead of the current one
 
 ### AH = 0x21
-Network functions
+Network functions <br>
+*Note: If there is no internet connection then all functions will set a carry flag and fill all registers with value 0xffffffff* 
 
 **Subfunctions**:
-  - BH = 0x01: get stats about network traffic
-      Input: EDI = pointer to 128B buffer
-      Output: filled buffer
-      +0: count of successfully sent packets
-      +4: count of how many sent packets lost
-      +8: count of successfully received packets
-      +12: count of errors while receiving packets
+  - AL = 0x01: get stats about network traffic    <br>
+      Input: EDI = pointer to 128B buffer <br>
+      Output: filled buffer               <br>
+      +0: count of successfully sent packets      <br>
+      +4: count of how many sent packets lost     <br>
+      +8: count of successfully received packets  <br>
+      +12: count of errors while receiving packets<br>
 
-  - BH = 0x02:
+  - AL = 0x02: open socket  <br>
+    Input: <br>
+           **BH** = IP version (0 = IPv4, 1 = IPv6)                       <br>
+           **BL** = protocol (1 ICMP, 2 TCP, 3 UDP)                       <br>
+           **DX** = port number                                           <br>
+           **ESI** = pointer to buffer (in which packets get stored)      <br>
+    Output: CX = Socket number                                            <br>
+    Note: If you set DX to zero then OS decides the port number. Also, IPv6 is not supported so these sockets will not work <br>
+
+  - AL = 0x03: send a packet
+    Input: <br>
+           **Bits 16-31 of EBX** = socket number  <br>
+           **BX** = port number (if it was set by the program)  <br>
+           **EDX** = IPv4 address, to which you want to send the packet <br>
+           **ESI** = pointer to packet  <br>
+           **ECX** = length of packet <br>
+
+  - AL = 0x04: wait for packet
+    Input: <br>
+           **CX** = socket number
+
+    Note: Halts the program until a packet was received which was addressed to the program. Then the program wakes up and can <br>
+          check its buffer. <br>
+
+  - AL = 0x05: close socket <br>
+    Input: <br>
+           **CX** = socket number <br>
+    Output: sets a carry flag if the program tries to close a socket which doesnt exist or belongs to an other task <br>
+
+  - AL = 0x07: resolve domain name  <br>
+    Input: <br>
+           **CX**: socket number    <br>
+           **EDI**: pointer to null-terminated string with domain name  <br>
+    Output: <br>
+            **EDX**: IPv4 address of server with this domain <br>
+            **EAX**: Time To Live of the IPv4 address (how long it takes until the IP address changes) in seconds <br>
+    Note: to send a DNS Request the socket has to be UDP socket <br>
+
+### AH = 0x22
+Timer Functions
+
+**Subfunctions**
+  - AL = 0x01: sleep X ms <br>
+    Input: <br>
+           **EBX** = number of milliseconds to sleep  <br>
+
+  - AL = 0x02: set counter  <br>
+    Input: <br>
+           **EBX** = pointer to 4 byte field which is incremented every 1ms <br>
+           **EDX** = number of ms until the function should stop to count <br>
+    Note: This function increments a variable given by the program every 1ms, while the program isnt put to sleep. This is useful for network functions, which are waiting for packets. <br>
+    It can set a timer of 2000ms (2 sec) and check in this 2 seconds if a packet was received. If the timer expires the function returns with an error. <br>
+
+  - AL = 0x03: get current time <br>
+    Output: <br>
+            **AL** = seconds (0 - 59) <br>
+            **AH** = minutes (0 - 59) <br>
+            **BL** = hours (0 - 23)   <br>
+            **BH** = day of the week (1 = monday, 7 = sunday) <br>
+            **CL** = day of month (1 - 31)  <br>
+            **CH** = month (1 - 12) <br>
+            **DL** = year (0 - 99)  <br>
+            **DH** = century (should be 20) <br>
