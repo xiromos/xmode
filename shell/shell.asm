@@ -82,7 +82,7 @@ exec_cmd:
     mov edi, command_buffer
     mov esi, help_str
     call cmp_str
-    ;jc .show_help
+    jc .show_help
 
     mov edi, command_buffer
     mov esi, clear_str
@@ -227,7 +227,7 @@ exec_cmd:
     mov ebx, COLOR_RED
     call print_string
     ret
-    ret
+
 .dhcp: db 0
 .dhcp_error_str: db 'Error: DHCP Request already sent', 0x0a, 0
 .no_net_str: db 'Error: No network connection', 0x0a, 0
@@ -430,6 +430,8 @@ exec_cmd:
 .prep_buffer:
     cmp byte [edi], 0
     je .clear_full
+    cmp byte [edi], '.'
+    je .clear_full
     inc edi
     dec ecx
     jnz .prep_buffer
@@ -470,6 +472,7 @@ exec_cmd:
 .found_xme_executable:
     mov al, '+'
     call print_char
+    ret
     ;call load_xme
 .found_prog:
     ;mov [program_address], edi
@@ -508,12 +511,12 @@ exec_cmd:
 
 .show_help:
     xor ah, ah
-    mov edi, [cur_dir_addr]
-    mov esi, program_help_bin
+    xor edi, edi    ;HELP.OBJ is in the root directory
+    mov esi, program_help_obj
     int 0x33
     jc .exec_prog_err
 
-    mov esi, program_help_bin
+    mov esi, program_help_obj
     mov edi, read_buffer
     mov ecx, 11
     rep movsb
@@ -542,17 +545,45 @@ exec_cmd:
     call clear_buffer
     call parse_arg
 
-    mov ah, 0x02
-    mov edi, file_buffer
+    ; mov ah, 0x02
+    ; mov edi, file_buffer
+    ; mov esi, read_buffer
+    ; int 0x33
+    xor ah, ah
     mov esi, read_buffer
+    mov edi, [cur_dir_addr]
+    mov bl, [drive_number]
+    int 0x33
+    jc .no_file
+
+    cmp ecx, 0
+    je print_buffer_ls.done
+
+    push ecx
+    mov ah, 0x0a
+    int 0x35
+
+    push esi
+
+    mov edi, esi
+    mov esi, read_buffer
+    mov edx, [cur_dir_addr]
+    mov ah, 0x0a
+    mov bl, [drive_number]
     int 0x33
 
-    mov esi, file_buffer
+
+    pop esi
+    pop ecx
+
+    push esi
+    push ecx
+
     mov ebx, 0x00ffffff
     xor edx, edx
     cmp ecx, 0
-    jne .read_file_loop
-    ret
+    je .done_read
+
 .read_file_loop:
     lodsb
     cmp al, 0x0a
@@ -562,6 +593,12 @@ exec_cmd:
     loop .read_file_loop
 
     call print_newline
+.done_read:
+    pop ecx
+    pop esi
+
+    mov ah, 0x0b
+    int 0x35
     ret
 .handle_newline:
     call print_newline
@@ -573,15 +610,16 @@ exec_cmd:
     xor ah, ah
     int 0x31
     cmp al, 'q'
-    je print_buffer_ls.done
+    je .done_read
     xor edx, edx
     jmp .read_file_loop
-.read_error:
-    mov esi, read_error_msg
+.no_file:
+    mov esi, no_file_msg
     mov ebx, COLOR_RED
     call print_string
     call print_newline
     ret
+
 .rename_file:
     mov esi, [argument]
     mov edi, read_buffer
@@ -595,7 +633,7 @@ exec_cmd:
     mov ebx, 0x00ffffff
     call print_string
     mov edi, read_buffer2
-    mov ecx, 12
+    xor ecx, ecx
 .rename_loop:
     xor ah, ah
     int 0x31
@@ -606,8 +644,9 @@ exec_cmd:
     cmp al, 0x08
     je .ren_handle_backspace
     
-    dec ecx
-    jz .rename_loop_lmt
+    cmp ecx, 11
+    jae .rename_loop
+    inc ecx
 
     stosb
     mov ebx, 0x00ffffff
@@ -621,9 +660,14 @@ exec_cmd:
     xor ecx, ecx
     call parse_arg_loop
 
-    mov ah, 0x04
+    mov esi, read_buffer3
+    call string_uppercase
+
+    mov ah, 0x0c
     mov esi, read_buffer
     mov edi, read_buffer3
+    mov edx, [cur_dir_addr]
+    mov bl, [drive_number]
     int 0x33
     jc .rename_error
     ret
@@ -650,9 +694,6 @@ exec_cmd:
     call print_string
     call print_newline
     ret
-.rename_loop_lmt:
-    inc ecx
-    jmp .rename_loop
 .quit_rename:
     call print_newline
     ret
@@ -672,8 +713,10 @@ exec_cmd:
     call get_text
 
     mov esi, read_buffer
-    mov edi, file_buffer
-    mov ah, 0x03
+    mov edx, file_buffer
+    mov edi, [cur_dir_addr]
+    mov ah, 0x0b
+    mov bl, [drive_number]
     int 0x33
     jc .write_error
 
@@ -695,8 +738,11 @@ exec_cmd:
     mov edi, read_buffer
     call clear_buffer
     call parse_arg
-    mov ah, 0x05
+
+    mov ah, 0x0d
     mov esi, read_buffer
+    mov edi, [cur_dir_addr]
+    mov bl, [drive_number]
     int 0x33
     jc .delete_error
 
@@ -1428,10 +1474,75 @@ list_drives:
     jmp .continue
 
 .ahci:
+    push esi
     mov esi, sata_device_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    mov esi, .serial_number_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop esi
+
+    push esi
+    push ecx
+    add esi, 26
+    mov ecx, 14
+    call print_buffer
+    call print_newline
+
+    mov esi, .model_name_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    pop ecx
+    pop esi
+
+    push esi
+    push ecx
+    add esi, 40
+    mov ecx, 20
+    call print_buffer
+    call print_newline
+
+    pop ecx
+    pop esi
+
+    push esi
+    push ecx
+
+    mov ebx, [esi+22]       ;block size
+    mov eax, [esi+14]       ;low LBA
+    cmp dword [esi+18], 0
+    jne .lba48_sata
+
+    call .print_size
+    jmp .skip_lba48_sata
+.lba48_sata:
+    push ebx
+    mov esi, show_usb_devices.usb_blocksize_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop ebx
+
+    mov eax, ebx
+    call print_dec
+
+    mov al, 'B'
+    call print_char
+    call print_newline
+
+    mov esi, .high_storage_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+.skip_lba48_sata:
+    call print_newline
+
+    pop ecx
+    pop esi
 
     pop eax
     pop esi
@@ -1485,6 +1596,7 @@ list_drives:
     mov esi, .high_storage_str
     mov ebx, 0x00ffffff
     call print_string
+    call print_newline
 
 .skip_lba48:
     call print_newline
@@ -1497,8 +1609,10 @@ list_drives:
     pop esi
     jmp .continue
 .ide_product_name: db '   Product name: ', 0
-.high_storage_str: db 'Size: More than 128GB', 0
+.high_storage_str: db '   Size: More than 128GB', 0
 .atapi_str: db 'CD / DVD (ATAPI Device)', 0
+.model_name_str: db '   Model name: ', 0
+.serial_number_str: db '   Serial number: ', 0
 
 .atapi:
     mov esi, .atapi_str
@@ -1627,6 +1741,8 @@ change_drive:
     mov ah, 0x20
     int 0x33
     jc .error
+
+    mov [drive_number], al
 
     mov esi, disk_changed_str
     mov ebx, COLOR_GREEN
@@ -1939,13 +2055,16 @@ cd_directory:
 .dir_back:
     cmp dword [cur_dir_addr], 0
     je .done
-    
+
     mov esi, dot_dot_entry
     mov edi, [cur_dir_addr]
     xor ah, ah
     mov bl, [drive_number]
     int 0x33
     jc .drive_error
+
+    cmp ebx, 0
+    je .root_dir
 
     mov ecx, 0x1000     ;directories are limited to 4KiB
     mov ah, 0x0a
@@ -1966,6 +2085,15 @@ cd_directory:
     pop edi
 
     mov [cur_dir_addr], edi
+    jmp .done
+
+.root_dir:
+    mov esi, [cur_dir_addr]
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+
+    mov dword [cur_dir_addr], 0
     jmp .done
 .error:
     mov esi, .dir_buffer
