@@ -30,7 +30,7 @@ start:
     mov bx, 67
     mov edx, 0xffffffff
     mov esi, ip_packet
-    mov ecx, 246
+    mov ecx, 244
     int 0x35
 
     pop cx
@@ -40,6 +40,7 @@ start:
     mov ah, 0x21
     mov al, 0x04
     int 0x35
+    ;jc .timed_out
 
     call check_packet
     jc .wait
@@ -144,6 +145,38 @@ start:
     mov byte [esi+243], 0xff
 
     jmp .dora
+
+.timed_out:
+    cmp byte [time_out], 1
+    je .error
+
+    mov esi, timed_out_str
+    mov ebx, 0x00ffffff
+    mov ah, 0x01
+    int 0x30
+
+    pop cx
+    mov byte [time_out], 1
+    jmp .dora
+
+.error:
+    pop cx
+
+    ;close socket
+    mov ah, 0x21
+    mov al, 0x05
+    int 0x35
+    
+    mov ecx, 0x2000
+    mov esi, [heap]
+
+    mov ah, 0x0b
+    int 0x35
+
+    mov ah, 0x05
+    int 0x35
+
+    ret
 check_packet:
     mov esi, [heap]
     mov edx, [esi]
@@ -323,13 +356,6 @@ print_newline:
     mov ah, 0x03
     int 0x30
     ret
-print_char:
-    push ebx
-    mov ebx, 0x00ffffff
-    mov ah, 0x02
-    int 0x30
-    pop ebx
-    ret
 print_dec:
     push ebx
     movzx ebx, al
@@ -455,3 +481,5 @@ router_port: dw 0
 router_ip: dd 0
 
 internet_err: db 'Error: No Internet Connection', 0x0a, 0
+timed_out_str: db 'Error while receiving DHCP packet. Trying again...', 0x0a, 0
+time_out: db 0
