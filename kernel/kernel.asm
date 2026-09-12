@@ -180,6 +180,7 @@ main:
     ; out 0x21, al
     xor al, al
     out 0xa1, al
+    out 0x21, al
 
     ;check amount of available memory
     mov edi, mmap_buffer
@@ -280,6 +281,42 @@ main:
     mov edx, [bm_base]
     call print_hex8
 
+    ; INIT FIRST TASK (SLOT 0)
+    mov edi, tasks_esp
+    cli
+    ; init idle task
+    push edi
+    mov esi, idle_task_str
+    mov ecx, 11
+    rep movsb
+    pop edi
+
+    mov dword [edi+19], 0xfffffffe
+
+    mov ah, 0x0a
+    mov ecx, 128
+    int 0x35
+
+    mov ebp, esp
+    mov esp, esi
+
+    push ss
+    push esp
+    push dword 0x202
+    push cs
+    push dword idle_task
+
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+
+    mov dword [edi+15], esp
+
+    mov esp, ebp
+    sti
+
     mov ebx, init_system
     mov esi, program_init_sys
     mov ah, 0x13
@@ -296,12 +333,6 @@ main:
 
     mov edx, [ohci_base]
     call print_hex8
-    call print_newline
-
-    ;call ahci_init
-    mov esi, ahci_initialized
-    mov ebx, 0x00ffffff
-    call print_string
     call print_newline
 
     call search_boot_device
@@ -389,7 +420,6 @@ main:
     call print_hex8
     call print_newline
 
-    ;call ahci_init
     mov esi, ahci_initialized
     mov ebx, 0x00ffffff
     call print_string
@@ -514,15 +544,17 @@ disk_error:
     jmp .halt
 
 get_bpb_data:
-    ; extended disk read
     push eax
-    mov ah, 0x0a
-    mov edi, 0x7c00        ;buffer
-    mov ecx, 0             ;LBA
-    mov [disk_lba], ecx
-    mov ecx, disk_lba
-    mov ebx, 1        ;sector count
-    int 0x32
+
+    mov eax, 1  ;read 1 sector
+    mov ecx, 0  ;LBA 0
+    mov dl, [drive_number]
+    mov dh, 0x0b    ;LBA28 read
+    mov edi, 0x7c00
+    call read_drive
+
+    mov esi, fs16_error_msg
+    jc rsod
 
     mov ax, [0x7c00+11]
     mov [bytes_per_sec], ax
@@ -545,31 +577,33 @@ get_bpb_data:
     pop eax
     ret
 load_root:
-    mov ah, 0x02
     xor edi, edi
-    xor ecx, ecx
-    mov cx, [root_start]
-    xor ebx, ebx
-    mov bx, [root_sectors]
-    int 0x32
-    jc disk_error
+    movzx ecx, word [root_start]
+    add ecx, dword [hidden_sectors]
+    movzx eax, word [root_sectors]
+    mov dl, [drive_number]
+    mov dh, 0x0b
+    call read_drive
+    
+    mov esi, fs16_error_msg
+    jc rsod
     ret
 load_fat:
-    mov ah, 0x02
     mov edi, 0x4000
-    xor ecx, ecx
-    mov cx, [reserved_sectors]
-    add ecx, [hidden_sectors]
-    xor ebx, ebx
-    cmp word [fat_size], 25
-    jb .continue
-    mov ebx, 25
+    movzx ecx, word [reserved_sectors]
+    add ecx, dword [hidden_sectors]
+
+    movzx eax, word [fat_size]
+
+    cmp eax, 25
+    jbe .load
+
+    mov eax, 25
     jmp .load
-.continue:
-    mov bx, [fat_size]
 .load:
-    int 0x32
-    jc disk_error
+    call read_drive
+    mov esi, fs16_error_msg
+    jc rsod
     ret
 
 
@@ -741,7 +775,7 @@ scan_disk_pci:
     and eax, ~(1 << 10)
     mov ebx, eax
     mov eax, ecx
-    or eax, 0x04
+    add eax, 0x04
     call pci_write
 
     call read_bar5
@@ -752,14 +786,13 @@ scan_disk_pci:
 
     and eax, 0xff
     add al, 0x20
-    mov [ahci_irq], al
 
     movzx ebx, al
     mov eax, ahci_interrupt_handler
     call set_irq
 
     mov byte [ahci_found], 1
-    ;call ahci_init
+    call ahci_init
     jmp .next_device
 .usb:
     mov edx, ebx
@@ -893,8 +926,10 @@ scan_disk_pci:
 
     or eax, (1 << 2)        ;activate busmastering bit
     or eax, (1 << 0)        ;activate DMA
+    and eax, ~(1 << 10)     ;enable interrupts
     mov ebx, eax
     mov eax, ecx
+    add eax, 0x04
     call pci_write
 
     mov eax, ecx
@@ -1030,7 +1065,9 @@ load_configs:
     ;load configs directory
     mov esi, dir_configs_str
     mov edi, CONFIG_DIR_BUFFER
-    mov ah, 0x02
+    mov edx, root_addr
+    mov bl, [drive_number]
+    mov ah, 0x0a
     int 0x33
     jc .error
 
@@ -1229,6 +1266,11 @@ map_region:
     add edi, 4
     ret
 
+idle_task:
+    nop
+    nop
+    int 0x20
+    jmp idle_task
 ; #### configure Realtime Clock ###
 init_rtc:
     mov dx, 0x70
@@ -1313,7 +1355,9 @@ load_drivers:
     ;load drivers directory
     mov esi, dir_drivers_str
     mov edi, DIR_DRIVERS_ADDR
-    mov ah, 0x02
+    mov edx, root_addr
+    mov bl, [drive_number]
+    mov ah, 0x0a
     int 0x33
     jc .drivers_dir_err
 
@@ -1322,7 +1366,7 @@ load_drivers:
     cmp byte [ohci_found], 1
     je .found_ohci
     cmp byte [intel_hd_audio], 1
-    je .found_intel_audiodev
+    ;je .found_intel_audiodev
     cmp byte [rtl8139_found], 1
     je .found_rtl8139
 
@@ -1341,7 +1385,7 @@ load_drivers:
     mov edi, OHCI_DRIVER_ADDR
     mov edx, DIR_DRIVERS_ADDR
     mov ah, 0x0a
-    mov bl, 0xff
+    mov bl, [drive_number]
     int 0x33
 
     mov eax, [ohci_base]
@@ -1351,7 +1395,7 @@ load_drivers:
 
     mov [usb_devices], ah
 
-    mov [usb_keybuffer], edx
+    mov [usb_keybuffer], ebx
 
     mov [usb_keyboard_tdptr], edi
     mov [usb_keyboard_edptr], esi
@@ -1711,6 +1755,11 @@ load_network_stack:
     call dword [.protocolobj_addr]
     mov byte [net_active], 0
     mov byte [net_stack_loaded], 1
+
+    mov esi, [.heap]
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
     popa
     clc
     ret
@@ -1737,7 +1786,6 @@ load_network_stack:
 .error_msg: db 'Error loading network files. Network unavailable', 0x0a, 0
 
 %include "data/data.asm"
-%include "data/font.asm"
 %include "kernel/stdfunc.asm"
 %include "syscalls/output.asm"
 %include "syscalls/exceptions.asm"
