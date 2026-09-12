@@ -24,6 +24,7 @@ int0x0:
     add dword [esp], 1
     iret
 int0x1:
+    iret
     pop eax
     pop ebx
     pop ecx
@@ -39,6 +40,7 @@ int0x6:
     pop ebx
     pop ecx
     pop edx
+    mov ebp, 6
     cli
     hlt
     pusha
@@ -98,6 +100,7 @@ int0xd:
     pop ebx
     pop ecx
     pop edx
+    mov ebp, 0x0d
     cli
     hlt
     pusha
@@ -257,11 +260,11 @@ irq0_handler:
     mov edi, tasks_esp
     jmp .search_loop
 .load_shell:
-    mov ax, 1
-    mov edi, tasks_esp+TASK_SIZE    ;EDI points to shell task
+    ; mov ax, 1
+    ; mov edi, tasks_esp+TASK_SIZE    ;EDI points to shell task
 
-    ; mov ax, 0
-    ; mov edi, tasks_esp              ;EDI points to idle task
+    mov ax, 0
+    mov edi, tasks_esp              ;EDI points to idle task
 .load_next:
     ;check attributes
     cmp dword [edi+11], 0
@@ -762,13 +765,16 @@ ahci_interrupt_handler:
     mov edi, eax
     add edi, 0x100
     mov edx, ecx
-    imul edx, 0x80
+    shl edx, 7
     add edi, edx
 
-    mov edx, [edi+0x10]
-    mov [edi+0x10], edx
+    mov ebp, [edi+0x10]
+    mov [edi+0x10], ebp
 
+    mov edx, [edi+0x30]
+    mov [edi+0x30], edx
     mov edx, [edi+0x34]
+    push ebx
     xor ebx, ebx
 .loop2:
     bt edx, ebx
@@ -781,7 +787,7 @@ ahci_interrupt_handler:
 
     push ecx
     mov ecx, ebx
-    imul ecx, 2
+    shl ecx, 1
     add esi, ecx
     pop ecx
 
@@ -803,6 +809,7 @@ ahci_interrupt_handler:
     mov edx, 1
     shl edx, ecx
     mov [eax+0x08], edx
+    pop ebx
 .next:
     inc ecx
     jmp .loop

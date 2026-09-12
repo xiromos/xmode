@@ -34,10 +34,10 @@
 ;       EDI+28: number of successfully received packets
 ;       EDO+32: number of packets, failed to receive
 ;   AL = 0x02: open socket
-;       Input: BH = net_interface (0 = IPv4, 1 = IPv6), BL = protocol (0x01 ICMP, 0x02 TCP, 0x03 UDP), DX = port number (if zero then let the OS decide) ESI = buffer address for packets
+;       Input: BH = net_interface (0 = IPv4, 1 = IPv6), BL = protocol (0x01 ICMP, 0x02 TCP, 0x03 UDP), DX = port number (if zero then let the OS decide), ESI = buffer address for packets
 ;       Output: socket number in CX or CF if port number is already used
 ;   AL = 0x03: send a packet
-;       Input: bit 16-31 of EBX = socket number, BX = port (zero if programs uses ICMP), EDX = IPv4 address (big endian), ESI = pointer to packet, ECX = length of packet
+;       Input: bits 16-31 of EBX = socket number, BX = port (zero if programs uses ICMP), EDX = IPv4 address (big endian), ESI = pointer to packet, ECX = length of packet
 ;   AL = 0x04: wait for packet
 ;       Input: CX = socket number
 ;       If returns, that means a packet was received. The program itself has to check if its the right packet.
@@ -1095,6 +1095,7 @@ network_functions:
     cmp al, 0x07
     je .resolve_dns
 
+.error:
     popa
     or dword [esp+8], 1
     iret
@@ -1179,10 +1180,6 @@ network_functions:
 .done:
     popa
     and dword [esp+8], 0xfffffffe
-    iret
-.error:
-    popa
-    or dword [esp+8], 1
     iret
 .tmp16: dw 0
 .custom_port:
@@ -1269,6 +1266,55 @@ network_functions:
 .packet_received:
     and byte [edi+3], ~(1 << 7)
     jmp .done
+
+;     push ecx
+;     mov ah, 0x0a
+;     mov ecx, 4
+;     int 0x35
+;     pop ecx
+
+;     xor ebp, ebp
+
+;     mov ebx, esi
+;     mov edx, PACKET_WAIT_TIME
+;     mov ah, 0x22
+;     mov al, 0x02
+;     int 0x35
+;     jnc .wait_loop
+
+;     mov ebp, 0xffffffff
+; .wait_loop:
+;     ;CX = socket number
+;     movzx edi, cx
+;     imul edi, SOCKET_ENTRY_SIZE
+;     add edi, socket_list
+;     test byte [edi+3], (1 << 7)
+;     jnz .packet_received
+
+;     cmp ebp, 0xffffffff
+;     je .skip_check_timer
+
+;     cmp dword [ebx], PACKET_WAIT_TIME
+;     jae .error_wait
+; .skip_check_timer:
+
+;     int 0x20
+;     jmp .wait_loop
+
+; .packet_received:
+;     and byte [edi+3], ~(1 << 7)
+
+;     mov ecx, 4
+;     mov ah, 0x0b
+;     int 0x35
+;     jmp .done
+
+; .error_wait:
+;     and byte [edi+3], ~(1 << 7)
+;     mov ecx, 4
+;     mov ah, 0x0b
+;     int 0x35
+;     jmp .error
 
 .no_network:
     popa
@@ -1579,6 +1625,7 @@ socket_list:
 
 SOCKET_ENTRY_SIZE   equ 12
 MAX_SOCKETS         equ 6
+PACKET_WAIT_TIME    equ 4000    ;time in ms after which a packet counts as missing
 
 ; If program gets a packet copied in its buffer, it has a following header:
 ; struc packet_header:
@@ -1625,7 +1672,7 @@ timer_functions:
     mov edi, [sleep_timers_list]
     mov ecx, [max_sleep_timers]
 .loop_sleep:
-    cmp word [edi], 0xff        ;deleted entry
+    cmp word [edi], 0xffff        ;deleted entry
     je .found_free
     cmp word [edi], 0
     je .found_free
@@ -1653,10 +1700,13 @@ timer_functions:
 
 ; #### COUNTERS ####
 .set_counter:
+    cmp edx, 0x80000000
+    jae .error
+
     mov ecx, [max_counters]
     mov edi, [counters_list]
 .set_loop:
-    cmp dword [edi], 0xff
+    cmp dword [edi], 0xffff
     je .found_free_cntr
     cmp dword [edi], 0
     je .found_free_cntr
@@ -1858,21 +1908,21 @@ check_timers:
     mov edi, [sleep_timers_list]
     mov ecx, [max_sleep_timers]
 .loop:
-    cmp word [edi], 0xff
+    cmp word [edi], 0xffff
     je .skip
     cmp word [edi], 0
     je .done_sleep
 
     mov eax, [system_tick]
-    cmp eax, [edi+4]
-    jb .skip
+    sub eax, [edi+4]
+    js .skip
 
     movzx esi, word [edi]
     imul esi, TASK_SIZE
     add esi, tasks_esp
 
     mov dword [esi+11], 0
-    mov word [edi], 0xff
+    mov word [edi], 0xffff
     mov dword [edi+4], 0
 .skip:
     add edi, 8
@@ -1883,19 +1933,19 @@ check_timers:
     mov edi, [counters_list]
     mov ecx, [max_counters]
 .loop2:
-    cmp dword [edi], 0xff
+    cmp dword [edi], 0xffff
     je .skip2
     cmp dword [edi], 0
     je .done
 
     mov esi, [edi]
-    inc dword [esi]
+    inc dword [esi]     ;increase counter
 
     mov eax, [system_tick]
-    cmp eax, [edi+4]
-    jb .skip2
+    sub eax, [edi+4]
+    js .skip2
 
-    mov dword [edi], 0xff
+    mov dword [edi], 0xffff
     mov dword [edi+4], 0
 .skip2:
     add edi, 8

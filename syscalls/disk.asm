@@ -757,7 +757,7 @@ write_dma:
 
 ahci_init:
     pusha
-    cmp dword [abar], 0                 ;no AHCI
+    cmp dword [abar], 0                 ;no AHCI controller
     je .no_ahci
     mov eax, [abar]
 
@@ -775,7 +775,6 @@ ahci_init:
     or ebx, (1 << 31)                   ;set AHCI mode again because it might be deleted after reset
     mov [eax+4], ebx
 
-    mov esi, ahci_device_list_addr      ;0x8b000
     mov ebx, [eax+0xc]                  ;Ports Implemented
     xor ecx, ecx
 .loop:
@@ -790,12 +789,15 @@ ahci_init:
     inc ecx
     jmp .loop
 .done:
+    mov eax, [abar]
+    mov dword [eax+0x10], 0xffffffff
+    mov dword [eax+0x08], 0xffffffff
     or dword [eax+4], (1 << 1)          ;enable global interrupts
-    mov byte [ahci_active], 1
     popa
     ret
 
 .found_port:
+    ;EAX = ABAR
     mov edi, eax
     add edi, 0x100
 
@@ -815,20 +817,14 @@ ahci_init:
     ; cmp edx, 1
     ; jne .empty_port
 
-    ;port has an active device
-    ;store information in ESI (16 bytes):
-    ;-Port Number
-    ;-Port Address
-    ;-Signature (device type)
-    mov [esi], ecx
-    mov [esi+4], edi
     mov edx, [edi+0x24]     ;PxSIG
     test edx, edx
     jz .empty_port
 
-    mov [esi+8], edx        ;0x00000101 = SATA, 0xEB140101 = ATAPI
-    inc word [ahci_devices]
+    ; mov [esi+10], edx        ;0x00000101 = SATA, 0xEB140101 = ATAPI
 
+    mov ebx, edx
+    ;store port data in global strucure DRIVE_LIST
     movzx edx, byte [avail_disks]
     imul edx, DRIVE_LIST_ENTRY
     add edx, DRIVE_LIST_ADDR
@@ -836,8 +832,10 @@ ahci_init:
     mov [edx+4], edi    ;Port Address
     mov [edx+8], cl     ;Port Number
     mov [edx+9], 0xaa   ;Drive Type
+    mov [edx+10], ebx
     inc byte [avail_disks]
 
+    push ebx
     ;stop port
     mov ebx, [edi+0x18]
     and ebx, ~(1 << 0)
@@ -851,6 +849,8 @@ ahci_init:
     jnz .wait
     test ebx, (1 << 14)
     jnz .wait
+
+    pop ebx
 
     ;set command lists
     push edi
@@ -872,7 +872,7 @@ ahci_init:
     add edi, ecx
 
     xor eax, eax
-    mov ecx, 32/4
+    mov ecx, 1024/4
     rep stosd
 
     pop eax
@@ -885,6 +885,33 @@ ahci_init:
     add edi, AHCI_MEM_BASE
     add edi, CMD_LIST_SIZE
     mov edx, edi            ;address of Reveived FIS
+
+    push ecx
+    push eax
+
+    xor eax, eax
+    mov ecx, RECEIVED_FIS_SIZE/4
+    rep stosd
+
+    pop eax
+    pop ecx
+
+    push ecx
+    push eax
+
+    ;clear command tables
+    mov edi, AHCI_PORT_MEM_OFF
+    imul edi, ecx
+    add edi, AHCI_MEM_BASE
+    add edi, CMD_LIST_SIZE
+    add edi, RECEIVED_FIS_SIZE
+
+    mov ecx, 256*32/4
+    xor eax, eax
+    rep stosd
+
+    pop eax
+    pop ecx
     pop edi
 
     mov [edi+0x8], edx      ;PxFB
@@ -892,46 +919,68 @@ ahci_init:
 
     mov dword [edi+0x30], 0xffffffff        ;clear PxSERR
     mov dword [edi+0x10], 0xffffffff        ;clear Interrupt Status
-    mov dword [edi+0x14], 0xffffffff        ;clear Interrupt Enable
+
+    push ebx
 
     mov ebx, [edi+0x18]
     or ebx, (1 << 4)        ;FIS Receive Enable
-    or ebx, (1 << 1)        ;SUD
-    or ebx, (1 << 28)       ;set active bit
     mov [edi+0x18], ebx
 
 .wait_fre:
-    bt dword [eax+0x18], 14
-    jnc .wait_fre
+    test dword [edi+0x18], (1 << 14)
+    jz .wait_fre
 
     mov ebx, [edi+0x18]
     or ebx, (1 << 0)        ;ST
+    or ebx, (1 << 1)        ;SUD
+    or ebx, (1 << 28)       ;set active bit
     mov [edi+0x18], ebx
 .wait_start:
-    bt dword [eax+0x18], 15
-    jnc .wait_start
+    test dword [edi+0x18], (1 << 15)
+    jz .wait_start
 
+    pop ebx
+
+    ; ## SKIPPING ATAPI ##
     cmp dword [edi+0x24], 0xeb140101
-    je .empty_port                          ;skip IDENTIFY because device is an ATAPI device
+    je .next                          ;skip IDENTIFY because device is an ATAPI device
 
     push eax
     mov al, cl
     call identify_ahci
     pop eax
-    mov dword [edi+0x14], 0x00000025       ;enable Interrupts
+
+    mov dword [edi+0x30], 0xffffffff        ;clear PxSERR
+    mov dword [edi+0x10], 0xffffffff        ;clear Interrupt Status
+    mov dword [eax+0x08], 0xffffffff
+
+    jc .port_err
+
+    mov dword [edi+0x14], 0x4000002d        ;activate interrupts
 .empty_port:
-    add esi, 12
-    inc ecx
-    jmp .loop
+    jmp .next
 .no_ahci:
-    mov byte [ahci_active], 0
     popa
     ret
+.port_err:
+    ;remove device from drive list
+    dec byte [avail_disks]
+    movzx edx, byte [avail_disks]
+    imul edx, DRIVE_LIST_ENTRY
+    add edx, DRIVE_LIST_ADDR
 
+    mov dword [edx], 0
+    mov dword [edx+4], 0
+    mov dword [edx+8], 0
+    mov dword [edx+12], 0
+
+    jmp .next
 
 identify_ahci:
     pusha
     ;AL = AHCI Port
+    ;EDI = port address
+    ;EBX = port index (for example bit 8 set for 9th port)
 
     ; Px + 0x00  CLB   (Command List Base)
     ; Px + 0x04  CLBU
@@ -949,16 +998,8 @@ identify_ahci:
     ; Px + 0x34  SACT
     ; Px + 0x38  CI    (Command Issue)
 
-    xor ah, ah
-    cmp ax, [ahci_devices]      ;check if device is valid
-    ;jae .no_device
-    imul ax, AHCI_PORT_ENTRY_SIZE
-
-    movzx ebx, ax
-    mov esi, ahci_device_list_addr
-    add esi, ebx
-
-    mov eax, [esi+4]            ;port address
+    movzx ebp, al
+    mov eax, edi
 
     mov ebx, [eax+0x38]
     ;or ebx, [eax+0x34]
@@ -976,7 +1017,7 @@ identify_ahci:
     ; DWORD 2: PRDT base addr high
     ; DWORD 3: reserved
 
-    mov edx, [esi]      ;port number
+    mov edx, ebp      ;port number
     mov esi, AHCI_MEM_BASE
     imul edx, AHCI_PORT_MEM_OFF
     add esi, edx
@@ -1003,17 +1044,33 @@ identify_ahci:
 
     ;set Command Header
     mov dword [edi], 0x00010005         ;FIS length + PRDT entries
-    mov dword [edi+4], esi
-    mov dword [edi+8], 0
+    mov dword [edi+4], 0
+    mov dword [edi+8], esi
     mov dword [edi+12], 0
 
     ;set PRDT
-    mov dword [esi+0x80], 0x5000        ;low address
+    push esi
+    push eax
+    push ecx
+
+    mov ecx, 512
+    mov ah, 0x0a
+    int 0x35
+
+    mov ebx, esi
+
+    pop ecx
+    pop eax
+    pop esi
+
+    push ebx
+
+    mov dword [esi+0x80], ebx           ;low address
     mov dword [esi+0x84], 0             ;high address
     mov dword [esi+0x88], 0             ;reserved
-    mov ebx, (1 << 31)
+    ;mov ebx, (1 << 31)
     or ebx, 511
-    mov dword [esi+0x8C], ebx           ;byte count + interrupt on completion
+    mov dword [esi+0x8c], ebx           ;byte count + interrupt on completion
 
     ;set FIS
     mov byte [esi], 0x27
@@ -1024,7 +1081,7 @@ identify_ahci:
     mov byte [esi+5], 0         ;LBA 1
     mov byte [esi+6], 0         ;LBA 2
 
-    mov byte [esi+7], 0      ;device byte
+    mov byte [esi+7], 0xe0      ;device byte
 
     mov byte [esi+8], 0         ;LBA 3
     mov byte [esi+9], 0         ;LBA 4
@@ -1047,15 +1104,308 @@ identify_ahci:
     or edx, ebx
     mov [eax+0x38], edx     ;set PxCI
 .wait_command:
-    mov esi, [eax+0x30]
-    test esi, esi
+    mov ecx, [eax+0x20]
+    test ecx, 1
     jnz .error
 
-    mov ecx, [eax+0x20]
+    mov ecx, [eax+0x30]
+    test ecx, ecx
+    jnz .serr
 
     mov edx, [eax+0x38]
     test edx, ebx
     jnz .wait_command
+
+    ;get data from buffer
+    pop esi
+
+    movzx edi, byte [avail_disks]
+    dec edi
+    imul edi, DRIVE_LIST_ENTRY
+    add edi, DRIVE_LIST_ADDR
+
+    test dword [esi+0xa6], (1 << 10)
+    jnz .lba48
+.lba28:
+    mov eax, [esi+0x78]
+    mov [edi+14], eax
+    mov dword [edi+18], 0
+    jmp .get_sector_size
+
+.lba48:
+    test dword [esi+0xa6], (1 << 14)
+    jz .lba28
+    test dword [esi+0xa6], (1 << 15)
+    jnz .lba28
+
+    mov eax, [esi+0xc8]
+    mov [edi+14], eax
+    mov eax, [esi+0xcc]
+    mov [edi+18], eax
+.get_sector_size:
+    test dword [esi+0xd4], (1 << 12)
+    jz .sector512
+
+    mov eax, [esi+0xea]
+    imul eax, 2
+    mov dword [edi+22], eax
+
+    ;4KiB sectores are not supported
+    mov ecx, 512
+    mov ah, 0x0b
+    int 0x35
+    popa
+    stc
+    ret
+.sector512:
+    mov dword [edi+22], 512
+
+.get_modelname:
+    push esi
+    push edi
+
+    add esi, 0x14
+    add edi, 26
+    mov ecx, 7
+.loop1:
+    lodsw
+    xchg al, ah
+    stosw
+    dec ecx
+    jnz .loop1
+
+    pop edi
+    pop esi
+
+    push edi
+    push esi
+
+    add esi, 0x36
+    add edi, 40
+    mov ecx, 10
+.loop2:
+    lodsw
+    xchg al, ah
+    stosw
+    dec ecx
+    jnz .loop2
+
+    pop esi
+    pop edi
+
+    mov edi, ebp      ;port number
+    imul edi, AHCI_PORT_MEM_OFF
+    add edi, AHCI_MEM_BASE
+    add edi, AHCI_TASK_STRUCT_OFF
+
+    xor eax, eax
+    mov ecx, 64/4
+    rep stosd
+
+    popa
+    clc
+    ret
+.serr:
+    mov [eax+0x30], ecx
+.error:
+    pop esi
+    mov ecx, 512
+    mov ah, 0x0b
+    int 0x35
+    popa
+    stc
+    ret
+
+; #### READ AHCI ####
+
+read_ahci:
+    ;AL = port number (0 - 31)
+    ;ECX = low LBA
+    ;DX = high LBA
+    ;BX = sector count
+    ;EDI = destination buffer
+    ;ESI = device type (SATA / ATAPI)
+
+    ; ! EXPECTS 512 BYTES SECTORS
+    pusha
+    cmp bx, 0
+    je .error
+    cmp al, 32
+    jae .error
+    push edi
+
+    movzx edi, al
+    movzx ebp, al
+    imul edi, 0x80
+    add edi, 0x100
+    add edi, dword [abar]
+
+    push ecx
+    push edx
+    push ebx
+
+    cli
+.cmd_slot:
+    mov ebx, [edi+0x38]
+    mov ecx, [edi+0x34]
+
+    or ebx, ecx
+    not ebx
+    test ebx, ebx
+    jz .no_slot
+
+    bsf ebx, ebx        ;EBX = number of free slot (0 - 31) in command list
+
+    mov [.device_type], esi
+
+    mov edx, [edi]
+    mov eax, ebx
+    shl eax, 5
+    add edx, eax
+
+
+    mov ecx, AHCI_PORT_MEM_OFF
+    imul ecx, ebp
+    add ecx, AHCI_MEM_BASE
+    add ecx, CMD_LIST_SIZE
+
+    push edi
+    push ecx
+    push eax
+    mov edi, ecx
+    mov ecx, 0xff/4
+    xor eax, eax
+    rep stosd
+    pop eax
+    pop ecx
+    pop edi
+
+    add ecx, RECEIVED_FIS_SIZE
+
+    mov eax, ebx
+    imul eax, CMD_TABLES_SIZE
+    add ecx, eax
+
+    mov eax, ebp
+    mov [.port], al
+    mov ebp, ebx            ;EBP = slot index in command list
+
+    pop ebx
+    push ebx
+    movzx eax, bx
+    shr eax, 13     ;EAX / 8192
+
+    and ebx, 8191
+    jz .zero
+
+    inc eax
+.zero:
+    cmp eax, 0
+    jne .skip
+
+    mov eax, 1
+.skip:
+    mov byte [.prdt_entry], al
+    shl eax, 16
+    or eax, 5
+    mov [edx], eax     ;FIS length of 20 bytes + number of PRDT entries
+    mov dword [edx+4], 0
+    mov dword [edx+8], ecx
+    mov dword [edx+12], 0
+
+    mov edx, ecx
+
+    mov byte [edx], 0x27
+    mov byte [edx+1], 0x80
+    mov byte [edx+2], 0x60        ;READ FPDMA QUEUED
+
+    pop ebx                       ;sector count
+    mov [edx+3], bl
+    mov [edx+11], bh
+    mov byte [edx+7], 0x40
+
+    mov eax, ebp
+    shl eax, 3
+    mov [edx+12], al              ;set NCQ tag
+
+    pop eax
+    pop ebx
+
+    mov [edx+4], bl
+    shr ebx, 8
+    mov [edx+5], bl
+    shr ebx, 8
+    mov [edx+6], bl
+    shr ebx, 8
+    mov [edx+8], bl
+
+    mov [edx+9], al
+    mov [edx+10], ah
+
+    pop ebx
+
+    push edi
+    push edx
+    mov edi, ebx
+
+    xor ebx, ebx
+    mov bl, [edx+3]
+    mov bh, [edx+11]
+    movzx eax, byte [.prdt_entry]
+    add edx, 0x80
+.loop:
+    mov [edx], edi
+    mov dword [edx+4], 0
+    mov dword [edx+8], 0
+
+    mov ecx, ebx
+    cmp ecx, 0x2000
+    jb .skip2
+
+    mov ecx, 0x2000
+.skip2:
+    imul ecx, 512
+    dec ecx
+    cmp eax, 1
+    je .last
+
+    mov [edx+12], ecx
+    jmp .next
+.last:
+    or ecx, (1 << 31)       ;interrupt on completion
+    mov [edx+12], ecx
+    jmp .send_command
+.next:
+    dec eax
+    add edi, 0x2000
+    sub ebx, 0x2000
+    add edx, 16
+    jmp .loop
+.send_command:
+    pop edx
+    pop edi
+
+    mov ebx, 1
+    mov ecx, ebp
+    shl ebx, ecx
+    or dword [edi+0x34], ebx
+    or dword [edi+0x38], ebx
+
+    movzx eax, word [current_task]
+    movzx edi, byte [.port]
+    imul edi, AHCI_PORT_MEM_OFF
+    add edi, AHCI_MEM_BASE
+    add edi, AHCI_TASK_STRUCT_OFF
+
+    mov edx, ebp
+    shl edx, 1 ;*2
+    add edi, edx
+    mov [edi], ax
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    mov dword [eax+11], TASK_FLAG_SLEEPING
+    sti
+    int 0x20
 
     popa
     clc
@@ -1064,7 +1414,220 @@ identify_ahci:
     popa
     stc
     ret
+.no_slot:
+    sti
+    hlt
+    jmp .cmd_slot
+.device_type: dd 0
+.prdt_entry: db 0
+.port: db 0
 
+; #### WRITE AHCI ####
+
+write_ahci:
+    ;AL = port number (0 - 31)
+    ;ECX = low LBA
+    ;DX = high LBA
+    ;BX = sector count
+    ;EDI = source buffer
+    ;ESI = device type (SATA / ATAPI)
+
+    ; ! EXPECTS 512 BYTES SECTORS
+    pusha
+    cmp bx, 0
+    je .error
+    cmp al, 32
+    jae .error
+    push edi
+
+    movzx edi, al
+    movzx ebp, al
+    imul edi, 0x80
+    add edi, 0x100
+    add edi, dword [abar]
+
+    push ecx
+    push edx
+    push ebx
+
+    cli
+.cmd_slot:
+    mov ebx, [edi+0x38]
+    mov ecx, [edi+0x34]
+
+    or ebx, ecx
+    not ebx
+    test ebx, ebx
+    jz .no_slot
+
+    bsf ebx, ebx        ;EBX = number of free slot (0 - 31) in command list
+
+    mov [.device_type], esi
+
+    mov edx, [edi]
+    mov eax, ebx
+    shl eax, 5
+    add edx, eax
+
+
+    mov ecx, AHCI_PORT_MEM_OFF
+    imul ecx, ebp
+    add ecx, AHCI_MEM_BASE
+    add ecx, CMD_LIST_SIZE
+
+    push edi
+    push ecx
+    push eax
+    mov edi, ecx
+    mov ecx, 0xff/4
+    xor eax, eax
+    rep stosd
+    pop eax
+    pop ecx
+    pop edi
+
+    add ecx, RECEIVED_FIS_SIZE
+
+    mov eax, ebx
+    imul eax, CMD_TABLES_SIZE
+    add ecx, eax
+
+    mov eax, ebp
+    mov [.port], al
+    mov ebp, ebx            ;EBP = slot index in command list
+
+    pop ebx
+    push ebx
+    movzx eax, bx
+    shr eax, 13     ;EAX / 8192
+
+    and ebx, 8191
+    jz .zero
+
+    inc eax
+.zero:
+    cmp eax, 0
+    jne .skip
+
+    mov eax, 1
+.skip:
+    mov byte [.prdt_entry], al
+    shl eax, 16
+    or eax, 5
+    or eax, (1 << 6)
+    mov [edx], eax     ;FIS length of 20 bytes + number of PRDT entries
+    mov dword [edx+4], 0
+    mov dword [edx+8], ecx
+    mov dword [edx+12], 0
+
+    mov edx, ecx
+
+    mov byte [edx], 0x27
+    mov byte [edx+1], 0x80
+    mov byte [edx+2], 0x61        ;READ FPDMA QUEUED
+
+    pop ebx                       ;sector count
+    mov [edx+3], bl
+    mov [edx+11], bh
+    mov byte [edx+7], 0x40
+
+    mov eax, ebp
+    shl eax, 3
+    mov [edx+12], al              ;set NCQ tag
+
+    pop eax
+    pop ebx
+
+    mov [edx+4], bl
+    shr ebx, 8
+    mov [edx+5], bl
+    shr ebx, 8
+    mov [edx+6], bl
+    shr ebx, 8
+    mov [edx+8], bl
+
+    mov [edx+9], al
+    mov [edx+10], ah
+
+    pop ebx
+
+    push edi
+    push edx
+    mov edi, ebx
+
+    xor ebx, ebx
+    mov bl, [edx+3]
+    mov bh, [edx+11]
+    movzx eax, byte [.prdt_entry]
+    add edx, 0x80
+.loop:
+    mov [edx], edi
+    mov dword [edx+4], 0
+    mov dword [edx+8], 0
+
+    mov ecx, ebx
+    cmp ecx, 0x2000
+    jb .skip2
+
+    mov ecx, 0x2000
+.skip2:
+    imul ecx, 512
+    dec ecx
+    cmp eax, 1
+    je .last
+
+    mov [edx+12], ecx
+    jmp .next
+.last:
+    or ecx, (1 << 31)       ;interrupt on completion
+    mov [edx+12], ecx
+    jmp .send_command
+.next:
+    dec eax
+    add edi, 0x2000
+    sub ebx, 0x2000
+    add edx, 16
+    jmp .loop
+.send_command:
+    pop edx
+    pop edi
+
+    mov ebx, 1
+    mov ecx, ebp
+    shl ebx, ecx
+    or dword [edi+0x34], ebx
+    or dword [edi+0x38], ebx
+
+    movzx eax, word [current_task]
+    movzx edi, byte [.port]
+    imul edi, AHCI_PORT_MEM_OFF
+    add edi, AHCI_MEM_BASE
+    add edi, AHCI_TASK_STRUCT_OFF
+
+    mov edx, ebp
+    shl edx, 1 ;*2
+    add edi, edx
+    mov [edi], ax
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    mov dword [eax+11], TASK_FLAG_SLEEPING
+    sti
+    int 0x20
+
+    popa
+    clc
+    ret
+.error:
+    popa
+    stc
+    ret
+.no_slot:
+    sti
+    hlt
+    jmp .cmd_slot
+.device_type: dd 0
+.prdt_entry: db 0
+.port: db 0
 ; Drive List in Memory at 0x8a700
 
 ; AHCI
@@ -1072,6 +1635,12 @@ identify_ahci:
 ; DWORD 2: Port Address
 ; BYTE 1:  Port Number
 ; BYTE 2:  0xAA (Drive Type)
+; DWORD 3: Signature (device type), (SATA or SATAPI), (0x00000101 = SATA, 0xEB140101 = SATAPI)
+; QWORD 1: Max. LBA
+; DWORD 1: Block size
+; 14 BYTES: serial number
+; 20 BYTES: model name
+; 40 BYTES: MBR partition information
 
 ; IDE
 ; DWORD 1: Busmaster Address (if 0 then DMA is not supported)
@@ -1428,13 +1997,12 @@ read_drive:
 ;Expects following Arguments
 ;If you read with extended LBA, pass into ECX a ext_lba structure
 ;When reading sectors give EDI the address of your buffer
-;When writing sectors give ESI the address of your buffer
 ;<> Arguments <>
     ;DL = Drive Number
     ;DH = EXT_LBA READ (0x0a = yes, 0x0b = no)
-    ;EAX = Sectors
+    ;AX = Sectors
     ;EDI = Buffer
-    ;ECX = LBA / address of LBA struct
+    ;ECX = LBA / pointer to LBA struct
 ;<> LBA struct <>
 ; ext_lba_struct:
 ;     db 0
@@ -1497,7 +2065,19 @@ read_drive:
     jmp .done
 
 .ahci:
-    ;call read_ahci
+    mov bx, ax
+    mov al, [esi+8]
+    mov esi, [esi+10]
+
+    mov ah, dh
+    xor edx, edx
+    cmp ah, 0x0b
+    je .read_ahci
+
+    movzx edx, word [ecx+4]
+    mov ecx, [ecx]
+.read_ahci:
+    call read_ahci
     jc .error
     jmp .done
 
@@ -1535,12 +2115,16 @@ read_drive:
     popa
     clc
     ret
+
+
 write_drive:
     ;DL = Drive Number
-    ;EAX = sectors
+    ;DH = EXT_LBA READ (0x0a = yes, 0x0b = no)
+    ;AX = sectors
     ;ESI = Buffer
-    ;ECX = LBA
+    ;ECX = LBA / pointer to lba_struct
     pusha
+    mov edi, esi
     movzx esi, dl
     imul esi, DRIVE_LIST_ENTRY
     add esi, DRIVE_LIST_ADDR
@@ -1595,7 +2179,21 @@ write_drive:
     clc
     ret
 .ahci:
-    ;call write_ahci
+    mov bx, ax
+    mov al, [esi+8]
+    mov esi, [esi+10]
+
+    mov ah, dh
+    xor edx, edx
+    cmp ah, 0x0b
+    je .write_ahci
+
+    movzx edx, word [ecx+4]
+    mov ecx, [ecx]
+.write_ahci:
+
+    call write_ahci
+    jc .error
     popa
     clc
     ret
@@ -2396,7 +2994,12 @@ read_ide_dma:
     mov dword [eax+11], 0x0000df00      ;set attribute: waiting for drive
     sti
     int 0x20
-
+; .wait_loop:
+;     cmp byte [ide_done], 1
+;     je .done
+;     int 0x20
+;     jmp .wait_loop
+; .done:
     clc
     ret
 .error:
