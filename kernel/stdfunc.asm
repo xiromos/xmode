@@ -16,35 +16,48 @@ print_string:
     ret
 
 print_char:
+    pusha
     cmp al, 0x0a
     je .newline
 
     call draw_char
     add dword [cur_x], 8
-    cmp dword [cur_x], width
+    mov edx, [real_width]
+    cmp dword [cur_x], edx
     jae .newline
     jmp .done
 .newline:
     mov dword [cur_x], 0
     add dword [cur_y], 16    ;font is 8x16
-    cmp dword [cur_y], height
+    mov edx, [real_height]
+    cmp dword [cur_y], edx
     jae .scroll
 .done:
+    popa
     ret
 .scroll:
     call scroll
-    mov dword [cur_y], height - 16
+    mov edx, [real_height]
+    sub edx, 16
+    mov dword [cur_y], edx
     jmp .done
 
 print_newline:
+    pusha
     mov dword [cur_x], 0
     add dword [cur_y], 16
-    cmp dword [cur_y], height
+    mov edx, [real_height]
+    sub edx, 16
+    cmp dword [cur_y], edx
     jae .scroll
+    popa
     ret
 .scroll:
     call scroll
-    mov dword [cur_y], height - 16
+    mov edx, [real_height]
+    sub edx, 16
+    mov dword [cur_y], edx
+    popa
     ret
 draw_char:
     pusha
