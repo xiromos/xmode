@@ -367,10 +367,6 @@ irq1_handler:
     inc cl
 
     mov [BUFFER_HEAD+ebx], cl
-    cmp al, 0x3b        ;F1
-    jne .done
-    call switch_tasks
-    xor al, al
 .done:
     push ax
     mov al, 0x20
@@ -381,6 +377,12 @@ irq1_handler:
     pop edi
     pop ebx
     iret
+
+;##################################################################################
+;################################# INT 0x31 #######################################
+;##################################################################################
+
+;AH = 0x00:     wait for keypress       :output: AL = Unicode char, AH = Xiromos Key Code (from keycode_table), DL = modifier keys (bit 0: L CTRL, bit 1: L SHFT, bit 2: L ALT, bit 3: WINDOWS, bit 4: R CTRL, bit 5: R SHFT, bit 6: R ALT (ALT Gr), bit 7: R WINDOWS)
 
 keyboard_handler:
     cmp ah, 0
@@ -416,6 +418,22 @@ keyboard_handler:
     mov al, [edi+ebx]
     inc byte [BUFFER_TAIL+ecx]
 
+    cmp al, 0x8b
+    jne .skip1
+
+    cmp byte [.task_switch], 1
+    je .skip1
+
+    mov byte [.task_switch], 1
+    call switch_tasks
+    mov byte [.task_switch], 0
+    jmp .block
+.skip1:
+
+    ;key scancodes and modifier keys for PS/2 keyboards are not supported yet
+    xor dl, dl
+    xor ah, ah
+
     pop ecx
     pop edi
     pop ebx
@@ -448,11 +466,18 @@ keyboard_handler:
     movzx ecx, byte [BUFFER_TAIL+ebx]
     add edi, ecx
 
-    ;mov dl, [edi]   ;modifier
+    mov dl, [edi]   ;modifier
 
     push ebx
+    test byte [edi], (1 << 1)       ;left shift
+    jnz .shift
+    test byte [edi], (1 << 5)       ;right shift
+    jnz .shift
+
     movzx ebx, byte [edi+1] ;Key1
     movzx eax, byte [usb_keymap+ebx]
+    mov ah, [usb_keymap.keycode_table+ebx]
+.get_key_done:
     pop ebx
 
     add ecx, 7
@@ -462,6 +487,18 @@ keyboard_handler:
     cmp byte [edi+1], 0
     je .sleep_usb
 
+    cmp al, 0x8b
+    jne .skip2
+
+    cmp byte [.task_switch], 1
+    je .skip2
+
+    mov byte [.task_switch], 1
+    call switch_tasks
+    mov byte [.task_switch], 0
+    jmp .usb_keyboard
+.skip2:
+
     pop ecx
     pop edi
     pop ebx
@@ -470,6 +507,13 @@ keyboard_handler:
     sti
     hlt
     jmp .usb_keyboard
+.task_switch: db 0
+.shift:
+    movzx ebx, byte [edi+1]
+    movzx eax, byte [usb_keymap.shift+ebx]
+
+    mov ah, [usb_keymap.keycode_table+ebx]
+    jmp .get_key_done
 
 keyboard_handler2:
     cli
@@ -507,10 +551,24 @@ irq12_handler:
 
 switch_tasks:
     pusha
-    mov ah, 0x01
     mov ebp, switch_tasks_str
-    mov esi, width/2-250
-    mov edi, height/2-150
+    mov ah, 0x01
+
+    mov esi, [real_width]
+    shr esi, 1
+    sub esi, 250
+
+    mov ecx, switch_tasks_window
+    mov [ecx+16], esi
+    mov [ecx+24], esi
+
+    mov edi, [real_height]
+    shr edi, 1
+    sub edi, 150
+
+    mov [ecx+20], edi
+    mov [ecx+28], edi
+
     mov ecx, 500
     mov edx, 200
     mov ebx, 0x00ffffff
@@ -578,18 +636,20 @@ switch_tasks:
     xor ax, ax
     sti
 .exit:
-    hlt
-    in al, 0x60
+    xor ah, ah
+    int 0x31
 
-    sub al, 1
-    cmp ax, [task_count]
-    ja .exit
-    add al, 1
-    
+    cmp al, 0x1b    ;ESC
+    je .done
+
+    xor ah, ah
+    sub al, 0x30
+
     cmp al, 0
     je .exit
-    cmp al, 0x01
-    je .done
+
+    cmp ax, [task_count]
+    ja .exit
 
     jmp .switch_task
 .done:
@@ -602,14 +662,20 @@ switch_tasks:
     int 0x34
     sti
 
-    mov dword [edi+16], width / 2-250
-    mov dword [edi+20], height / 2-150
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 250
+    mov dword [edi+16], eax
+
+    mov eax, [real_height]
+    shr eax, 1
+    sub eax, 150
+    mov dword [edi+20], eax
     popa
     ret
 
 .switch_task:
     cli
-    sub al, 1
     mov [main_task], ax
 
     mov bx, [switch_tasks_win_id]
@@ -618,8 +684,15 @@ switch_tasks:
     int 0x34
     sti
 
-    mov dword [edi+16], width / 2-250
-    mov dword [edi+20], height / 2-150
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 250
+    mov dword [edi+16], eax
+
+    mov eax, [real_height]
+    shr eax, 1
+    sub eax, 150
+    mov dword [edi+20], eax
     popa
     ret
 irq14_handler:

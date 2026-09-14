@@ -65,6 +65,7 @@ output_handler:
     popa
     iret
 .print_string_sleep:
+    sti
     hlt
     jmp .print_string
 
@@ -82,29 +83,35 @@ output_handler:
 
     call draw_char
     add dword [cur_x], 8
-    cmp dword [cur_x], width
+    mov edx, [real_width]
+    cmp dword [cur_x], edx
     jae .newline
     jmp .done
 .newline:
     mov dword [cur_x], 0
     add dword [cur_y], 16    ;font is 8x16
-    cmp dword [cur_y], height
+    mov edx, [real_height]
+    cmp dword [cur_y], edx
     jae .scroll
 .done:
     popa
     iret
 .scroll:
     call scroll
-    mov dword [cur_y], height - 16
+    mov edx, [real_height]
+    sub edx, 16
+    mov dword [cur_y], edx
     jmp .done
 .print_char_sleep:
+    sti
     hlt
     jmp .print_char
 
 .print_newline:
     mov dword [cur_x], 0
     add dword [cur_y], 16
-    cmp dword [cur_y], height
+    mov edx, [real_height]
+    cmp dword [cur_y], edx
     jae .scroll
     popa
     iret
