@@ -53,6 +53,34 @@ scan_codes:
     db '4','5','6','+'
     db '1','2','3','0'
     db '.'
+.keycode_table:
+    db KEY_NONE                 ; 0x00
+    db KEY_ESC                  ; 0x01
+    db KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0 ; 0x02 - 0x0B
+    db KEY_NONE, KEY_NONE       ; 0x0C - 0x0D ('-' und '=')
+    db KEY_BACKSPACE            ; 0x0E
+    db KEY_TAB                  ; 0x0F
+    db KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P ; 0x10 - 0x19
+    db KEY_NONE, KEY_NONE       ; 0x1A - 0x1B ('[' und ']')
+    db KEY_ENTER                ; 0x1C
+    db KEY_LCTRL                ; 0x1D
+    db KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L ; 0x1E - 0x26
+    db KEY_NONE, KEY_NONE, KEY_NONE ; 0x27 - 0x29
+    db KEY_LSHIFT               ; 0x2A
+    db KEY_NONE                 ; 0x2B
+    db KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M ; 0x2C - 0x32
+    db KEY_NONE, KEY_NONE, KEY_NONE ; 0x33 - 0x35
+    db KEY_RSHIFT               ; 0x36
+    db KEY_NONE                 ; 0x37
+    db KEY_LALT                 ; 0x38
+    db KEY_SPACE                ; 0x39
+    db KEY_NONE                 ; 0x3A (Caps Lock)
+    db KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10 ; 0x3B - 0x44
+    times (0x57 - 0x45) db KEY_NONE
+    db KEY_F11                  ; 0x57
+    db KEY_F12                  ; 0x58
+    
+    times (128 - 0x58) db KEY_NONE
 keymap_shift:
     db 0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', 8
     db 9
@@ -68,7 +96,7 @@ keymap_shift:
     db 0                ; Caps Lock
 
     ; F1–F10
-    db 0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44
+    db 0x8b,0x8c,0x8d,0x8e,0x8f,0x90,0x91,0x92,0x93,0x94
 
     ; More control keys
     db 0                ; Num Lock
@@ -341,10 +369,144 @@ usb_keymap:
 
     db 0    ;Caps Lock
 
-    db 12 dup(0)    ;F1 - F12
+    db 0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44    ;F1 - F12
+    dw 0
     db 9 dup(0)
     db 4 dup(0)
     times (256-83) db 0
+.shift:
+    times 4 db 0
+    db 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
+    db 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Z', 'Y'
+    db '!', '@', '#', '$', '%', '^', '&', '*', '(', ')'
+    db 0x0d     ;Enter
+    db 0x1b     ;ESC
+    db 0x08     ;Backspace
+    db 0x09     ;TAB
+    db 0x20     ;Space
+    db '_'
+    db '+'
+    db '{'
+    db '}'
+    db '|'
+    db 0
+    db ':'
+    db '"'
+    db '~'
+    db '<'
+    db '>'
+    db '?'
+
+    db 0    ;Caps Lock
+
+    db 0x8b,0x8c,0x8d,0x8e,0x8f,0x90,0x91,0x92,0x93,0x94    ;F1 - F12
+    dw 0
+    db 9 dup(0)
+    db 4 dup(0)
+    times (256-83) db 0
+.keycode_table:
+    db KEY_NONE                 ; 0x00: Reserved
+    db KEY_NONE                 ; 0x01: ErrorRollOver
+    db KEY_NONE                 ; 0x02: POSTFail
+    db KEY_NONE                 ; 0x03: ErrorUndefined
+    
+    ; 0x04 - 0x1D: letters
+    db KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H
+    db KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P
+    db KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X
+    db KEY_Y, KEY_Z
+    
+    ; 0x1E - 0x27: numbers
+    db KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0
+    
+    ; 0x28 - 0x2C: standard control keys
+    db KEY_ENTER                ; 0x28
+    db KEY_ESC                  ; 0x29
+    db KEY_BACKSPACE            ; 0x2A
+    db KEY_TAB                  ; 0x2B
+    db KEY_SPACE                ; 0x2C
+    
+    ; 0x2D - 0x39: special keys
+    times (0x3A - 0x2D) db KEY_NONE
+    
+    ; 0x3A - 0x45: function keys
+    db KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6
+    db KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12
+
+    times (256 - 0x45) db KEY_NONE
+
+;###################################################################
+;############################# KEY CODES ###########################
+;###################################################################
+
+KEY_NONE        equ 0x00
+
+; letters
+KEY_A           equ 0x01
+KEY_B           equ 0x02
+KEY_C           equ 0x03
+KEY_D           equ 0x04
+KEY_E           equ 0x05
+KEY_F           equ 0x06
+KEY_G           equ 0x07
+KEY_H           equ 0x08
+KEY_I           equ 0x09
+KEY_J           equ 0x0A
+KEY_K           equ 0x0B
+KEY_L           equ 0x0C
+KEY_M           equ 0x0D
+KEY_N           equ 0x0E
+KEY_O           equ 0x0F
+KEY_P           equ 0x10
+KEY_Q           equ 0x11
+KEY_R           equ 0x12
+KEY_S           equ 0x13
+KEY_T           equ 0x14
+KEY_U           equ 0x15
+KEY_V           equ 0x16
+KEY_W           equ 0x17
+KEY_X           equ 0x18
+KEY_Y           equ 0x19
+KEY_Z           equ 0x1A
+
+; numbers
+KEY_1           equ 0x1B
+KEY_2           equ 0x1C
+KEY_3           equ 0x1D
+KEY_4           equ 0x1E
+KEY_5           equ 0x1F
+KEY_6           equ 0x20
+KEY_7           equ 0x21
+KEY_8           equ 0x22
+KEY_9           equ 0x23
+KEY_0           equ 0x24
+
+; control keys
+KEY_ENTER       equ 0x25
+KEY_ESC         equ 0x26
+KEY_BACKSPACE   equ 0x27
+KEY_TAB         equ 0x28
+KEY_SPACE       equ 0x29
+KEY_LSHIFT      equ 0x2A
+KEY_RSHIFT      equ 0x2B
+KEY_LCTRL       equ 0x2C
+KEY_LALT        equ 0x2D
+
+; function keys
+KEY_F1          equ 0x2E
+KEY_F2          equ 0x2F
+KEY_F3          equ 0x30
+KEY_F4          equ 0x31
+KEY_F5          equ 0x32
+KEY_F6          equ 0x33
+KEY_F7          equ 0x34
+KEY_F8          equ 0x35
+KEY_F9          equ 0x36
+KEY_F10         equ 0x37
+KEY_F11         equ 0x38
+KEY_F12         equ 0x39
+
+;###################################################################
 
 ohci_read_sectors: dd 0
 uhci_read_sectors: dd 0
@@ -487,10 +649,10 @@ switch_tasks_window:
     dd 0x00ffffff   ;background color
     dd 500          ;width
     dd 200          ;height
-    dd width /2-250          ;CurX
-    dd height /2-150          ;CurY
-    dd width /2-250          ;original CurX
-    dd height /2-150          ;original CurY
+    dd 0            ;CurX
+    dd 0            ;CurY
+    dd 0            ;original CurX
+    dd 0            ;original CurY
 switch_tasks_str: db 'Switch Tasks - ESC to quit', 0
 switch_tasks_win_id: dw 0
 switch_tasks_msg: db 'Available Tasks: ', 0
