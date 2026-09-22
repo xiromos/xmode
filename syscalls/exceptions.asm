@@ -1023,6 +1023,228 @@ ohci_interrupt_handler:
 
 .last_keyreport: db 0 dup(8)
 
+ps2_mouse_handler:
+    cli
+    pusha
+
+    in al, 0x60
+    mov ah, [.index]
+    cmp ah, 0
+    jne .skip1
+
+    test al, (1 << 3)
+    jz .done
+.skip1:
+    inc byte [.index]
+    cmp byte [.index], 3
+    jb .skip2
+
+    mov byte [.index], 0
+.skip2:
+    movzx ebx, ah
+    mov [.status+ebx], al
+    cmp ah, 2
+    jb .done
+
+    mov al, [.status]
+
+    movzx ecx, byte [.status+1]
+    test al, (1 << 4)
+    jz .skip3
+
+    or ecx, 0xffffff00
+.skip3:
+    add dword [.m_cur_x], ecx
+    mov esi, [.m_cur_x]
+    cmp esi, 0
+    jge .check_x
+    mov dword [.m_cur_x], 0
+    jmp .done_x
+
+.check_x:
+    cmp esi, [real_width]
+    jle .done_x
+    mov esi, [real_width]
+    dec esi
+    mov [.m_cur_x], esi
+.done_x:
+    movzx edx, byte [.status+2]
+    test al, (1 << 5)
+    jz .skip4
+
+    or edx, 0xffffff00
+.skip4:
+    neg edx
+    add dword [.m_cur_y], edx
+
+    mov esi, [.m_cur_y]
+    cmp esi, 0
+    jge .check_y
+    mov dword [.m_cur_y], 0
+    jmp .done_y
+
+    ; mov al, '#'
+    ; call print_char
+    cld
+.check_y:
+    cmp esi, [real_height]
+    jle .done_y
+    mov esi, [real_height]
+    dec esi
+    mov dword [.m_cur_y], esi
+.done_y:
+
+    ; #### restore background ####
+    mov esi, [.prev_bg]
+    mov edi, [frame_buffer]
+    mov eax, [.prev_curX]
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+    add edi, eax
+    
+    mov eax, [.prev_curY]
+    imul eax, dword [pitch]
+    add edi, eax
+
+    movzx ecx, byte [bpp]
+    imul ecx, 8
+    mov edx, 16
+.loop:
+    push ecx
+    rep movsb
+    pop ecx
+
+    sub edi, ecx
+    add edi, dword [pitch]
+    dec edx
+    jnz .loop
+
+    ; #### save new background ####
+    mov edi, [.prev_bg]
+    mov esi, [frame_buffer]
+
+    mov eax, [.m_cur_x]
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+    add esi, eax
+    
+    mov eax, [.m_cur_y]
+    imul eax, dword [pitch]
+    add esi, eax
+
+    movzx ecx, byte [bpp]
+    imul ecx, 8
+    mov edx, 16
+.loop2:
+    push ecx
+    rep movsb
+    pop ecx
+
+    sub esi, ecx
+    add esi, dword [pitch]
+    dec edx
+    jnz .loop2
+
+    mov esi, [.mouse_bmp]
+    cmp esi, 0xffffffff
+    jne .skip5
+
+    mov esi, .standard
+.skip5:
+    call .draw_cursor
+    mov eax, [.m_cur_x]
+    mov [.prev_curX], eax
+    mov eax, [.m_cur_y]
+    mov [.prev_curY], eax
+.done:
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+
+    popa
+    iret
+
+
+; #### DRAW CURSOR BITMAP ####
+.draw_cursor:
+    pusha
+
+    mov eax, [.m_cur_y]
+    imul eax, [pitch]        ; y * pitch
+
+    mov ebx, [.m_cur_x]
+    movzx ecx, byte [bpp]
+    imul ebx, ecx              ; x * 3
+
+    add eax, ebx
+    add eax, [frame_buffer]
+
+    mov ebx, eax             ; ebx = start address
+
+    mov ecx, 16               ; rows
+.row:
+    mov dl, [esi]
+    inc esi
+    mov edi, ebx             ; start of this row
+    mov ebp, 8               ; columns
+.col:
+    test dl, 0x80
+    jz .skip7
+    
+    cmp byte [bpp], 4
+    je .draw32
+
+    mov eax, [.cursor_color]
+    mov [edi], ax
+    shr eax, 16
+    mov [edi+2], al
+    jmp .skip7
+.draw32:
+    mov eax, [.cursor_color]
+    mov [edi], eax
+.skip7:
+    shl dl, 1
+    push ecx
+    movzx ecx, byte [bpp]
+    add edi, ecx               ;next pixel
+    pop ecx
+    
+    dec ebp
+    jnz .col
+
+    add ebx, [pitch]         ;next line
+    dec ecx
+    jnz .row
+
+    popa
+    ret
+.status: times 3 db 0
+.index: db 0
+.m_cur_x: dd 0
+.m_cur_y: dd 0
+.mouse_bmp: dd 0xffffffff
+.cursor_color: dd 0xffffffff
+.standard:
+    db 0b10000000
+    db 0b11000000
+    db 0b10100000
+    db 0b10010000
+    db 0b10001000
+    db 0b10000100
+    db 0b10000010
+    db 0b11111111
+    db 0b00111000
+    db 0b00111000
+    db 0b00011100
+    db 0b00011100
+    db 0b00011100
+    db 0b00001110
+    db 0b00001110
+    db 0b00000000
+.prev_bg: dd 0xffffeeee      ;pointer to buffer with old background
+.prev_curX: dd 0
+.prev_curY: dd 0
+
 
 irq5_handler:
     pusha
@@ -1147,8 +1369,8 @@ rtc_handler:
     in al, dx
 
     mov al, 0x20
-    out 0x20, al
     out 0xa0, al
+    out 0x20, al
     popa
     iret
 

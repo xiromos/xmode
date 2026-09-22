@@ -191,6 +191,10 @@ set_idt:
     mov ebx, 0x2b
     call set_idt_entry
 
+    mov eax, ps2_mouse_handler
+    mov ebx, 0x2c
+    call set_idt_entry
+
     mov eax, irq14_handler
     mov ebx, 0x2e
     call set_idt_entry

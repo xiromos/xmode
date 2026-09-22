@@ -9,7 +9,6 @@
 ;AH = 0x04: terminate a task (not the caller)                                                           ;EBX = PID or ESI = Taskname (if one is set, other should be zero)  CF on error
 ;   Error ist set if the PID is 0 or 1 or if the task is a kernel task
 ;AH = 0x05: terminate the process which called the syscall
-;AH = 0x06: terminate the caller process but skip the part where freeing the tasks heap
 ;AH = 0x07: change task state
 ;   AL = 0x01: task state = sleeping
 ;AH = 0x0A: allocate heap                                                                               ;Input: ECX = size         Output: ESI = pointer to heap chunk
@@ -67,8 +66,6 @@ program_sys_handler:
     cmp ah, 0x04
     je kill_task
     cmp ah, 0x05
-    je .terminate_process
-    cmp ah, 0x06
     je .terminate_process
     cmp ah, 0x07
     je change_task_state
@@ -419,6 +416,49 @@ kill_task:
 .kill_pid:
     cmp ebx, 0
     je .error
+    cmp ebx, 1
+    je .error
+
+    cli
+    cmp bx, [current_task]
+    je program_sys_handler.terminate_process
+    
+    mov ecx, ebx
+
+    imul ebx, TASK_SIZE
+    add ebx, tasks_esp
+    cmp byte [ebx], 0
+    je .error
+    cmp byte [ebx], 0xe5
+    je .error
+
+    push ebx
+    mov bx, cx
+    call free_task_heap
+    pop ebx
+
+    mov byte [ebx], 0xe5
+    mov esi, [ebx+19]
+    cmp esi, 0xfffffffe
+    je .skip_free_heap
+    
+    push ecx
+    mov ecx, [ebx+23]
+    mov ah, 0x0b
+    int 0x35
+    pop ecx
+
+.skip_free_heap:
+    mov dword [ebx+11], 0
+    mov dword [ebx+19], 0
+    mov dword [ebx+23], 0
+
+    dec word [task_count]
+
+    cmp word [main_task], cx
+    jne .done
+
+    mov word [main_task], 1
 .done:
     popa
     and dword [esp+8], 0xfffffffe
@@ -647,6 +687,7 @@ free_heap:
     cmp ax, word [current_task]
     jne .error
     mov word [edi], 0
+    add edi, 2
     dec ecx
     jnz .loop
 
@@ -1254,67 +1295,73 @@ network_functions:
 
 .wait_packet:
     ;CX = socket number
-    movzx edi, cx
-    imul edi, SOCKET_ENTRY_SIZE
-    add edi, socket_list
-    test byte [edi+3], (1 << 7)
-    jnz .packet_received
-
-    int 0x20
-    jmp .wait_packet
-
-.packet_received:
-    and byte [edi+3], ~(1 << 7)
-    jmp .done
-
-;     push ecx
-;     mov ah, 0x0a
-;     mov ecx, 4
-;     int 0x35
-;     pop ecx
-
-;     xor ebp, ebp
-
-;     mov ebx, esi
-;     mov edx, PACKET_WAIT_TIME
-;     mov ah, 0x22
-;     mov al, 0x02
-;     int 0x35
-;     jnc .wait_loop
-
-;     mov ebp, 0xffffffff
-; .wait_loop:
-;     ;CX = socket number
 ;     movzx edi, cx
 ;     imul edi, SOCKET_ENTRY_SIZE
 ;     add edi, socket_list
 ;     test byte [edi+3], (1 << 7)
 ;     jnz .packet_received
 
-;     cmp ebp, 0xffffffff
-;     je .skip_check_timer
-
-;     cmp dword [ebx], PACKET_WAIT_TIME
-;     jae .error_wait
-; .skip_check_timer:
-
 ;     int 0x20
-;     jmp .wait_loop
+;     jmp .wait_packet
 
 ; .packet_received:
 ;     and byte [edi+3], ~(1 << 7)
-
-;     mov ecx, 4
-;     mov ah, 0x0b
-;     int 0x35
 ;     jmp .done
+    sti
+    push ecx
+    mov ah, 0x0a
+    mov ecx, 4
+    int 0x35
+    pop ecx
 
-; .error_wait:
-;     and byte [edi+3], ~(1 << 7)
-;     mov ecx, 4
-;     mov ah, 0x0b
-;     int 0x35
-;     jmp .error
+    xor ebp, ebp
+
+    mov ebx, esi
+    mov dword [ebx], 0
+    mov edx, PACKET_WAIT_TIME
+    mov ah, 0x22
+    mov al, 0x02
+    int 0x35
+    jnc .wait_loop
+
+    mov ebp, 0xffffffff
+.wait_loop:
+    ;CX = socket number
+    movzx edi, cx
+    imul edi, SOCKET_ENTRY_SIZE
+    add edi, socket_list
+    test byte [edi+3], (1 << 7)
+    jnz .packet_received
+
+    cmp ebp, 0xffffffff
+    je .skip_check_timer
+
+    cmp dword [ebx], PACKET_WAIT_TIME
+    jae .error_wait
+.skip_check_timer:
+
+    int 0x20
+    jmp .wait_loop
+
+.packet_received:
+    and byte [edi+3], ~(1 << 7)
+    cmp ebp, 0xffffffff
+    je .done
+
+    mov ecx, 4
+    mov ah, 0x0b
+    int 0x35
+    jmp .done
+
+.error_wait:
+    and byte [edi+3], ~(1 << 7)
+    cmp ebp, 0xffffffff
+    je .error
+
+    mov ecx, 4
+    mov ah, 0x0b
+    int 0x35
+    jmp .error
 
 .no_network:
     popa
@@ -1445,14 +1492,57 @@ network_functions:
     pop ecx
     ;[ TODO ]: set timeout for packets of 4 seconds
 .wait_packet_dns:
+    ; movzx edi, cx
+    ; imul edi, SOCKET_ENTRY_SIZE
+    ; add edi, socket_list
+    ; test byte [edi+3], (1 << 7)
+    ; jnz .done_dns
+
+    ; int 0x20
+    ; jmp .wait_packet_dns
+    sti
+    push ecx
+    mov ah, 0x0a
+    mov ecx, 4
+    int 0x35
+    pop ecx
+
+    xor ebp, ebp
+
+    mov ebx, esi
+    mov dword [ebx], 0
+    mov edx, PACKET_WAIT_TIME
+    mov ah, 0x22
+    mov al, 0x02
+    int 0x35
+    jnc .wait_loop2
+
+    mov ebp, 0xffffffff
+.wait_loop2:
+    ;CX = socket number
     movzx edi, cx
     imul edi, SOCKET_ENTRY_SIZE
     add edi, socket_list
     test byte [edi+3], (1 << 7)
-    jnz .done_dns
+    jnz .packet_received2
+
+    cmp ebp, 0xffffffff
+    je .skip_check_timer2
+
+    cmp dword [ebx], PACKET_WAIT_TIME
+    jae .error_wait
+.skip_check_timer2:
 
     int 0x20
-    jmp .wait_packet_dns
+    jmp .wait_loop2
+
+.packet_received2:
+    cmp ebp, 0xffffffff
+    je .done_dns
+
+    mov ecx, 4
+    mov ah, 0x0b
+    int 0x35
 
 .done_dns:
     and byte [edi+3], ~(1 << 7)
@@ -1625,7 +1715,7 @@ socket_list:
 
 SOCKET_ENTRY_SIZE   equ 12
 MAX_SOCKETS         equ 6
-PACKET_WAIT_TIME    equ 4000    ;time in ms after which a packet counts as missing
+PACKET_WAIT_TIME    equ 3000    ;time in ms after which a packet counts as missing
 
 ; If program gets a packet copied in its buffer, it has a following header:
 ; struc packet_header:
@@ -1706,7 +1796,7 @@ timer_functions:
     mov ecx, [max_counters]
     mov edi, [counters_list]
 .set_loop:
-    cmp dword [edi], 0xffff
+    cmp dword [edi], 0xffffffff
     je .found_free_cntr
     cmp dword [edi], 0
     je .found_free_cntr
@@ -1908,16 +1998,17 @@ check_timers:
     mov edi, [sleep_timers_list]
     mov ecx, [max_sleep_timers]
 .loop:
-    cmp word [edi], 0xffff
+    mov bx, [edi]
+    cmp bx, 0xffff
     je .skip
-    cmp word [edi], 0
+    cmp bx, 0
     je .done_sleep
 
     mov eax, [system_tick]
     sub eax, [edi+4]
     js .skip
 
-    movzx esi, word [edi]
+    movzx esi, bx
     imul esi, TASK_SIZE
     add esi, tasks_esp
 
@@ -1933,19 +2024,19 @@ check_timers:
     mov edi, [counters_list]
     mov ecx, [max_counters]
 .loop2:
-    cmp dword [edi], 0xffff
+    mov ebx, [edi]
+    cmp ebx, 0xffffffff
     je .skip2
-    cmp dword [edi], 0
+    cmp ebx, 0
     je .done
 
-    mov esi, [edi]
-    inc dword [esi]     ;increase counter
+    inc dword [ebx]     ;increase counter
 
     mov eax, [system_tick]
     sub eax, [edi+4]
     js .skip2
 
-    mov dword [edi], 0xffff
+    mov dword [edi], 0xffffffff
     mov dword [edi+4], 0
 .skip2:
     add edi, 8

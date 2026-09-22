@@ -3,7 +3,9 @@
 ;Syscall for drawing and deleting a window
 ;AH = 0x1: draw a window                        ;input: ESI = X, EDI = Y, ECX = width, EDX = height, EBX = background color, EBP = pointer to title  output: EAX = window ID, EBX = CurX, ECX = CurY
 ;AH = 0x2: remove window                        ;input: EDI = window_packet, bx = window id
-;AH = 0xb: draw a window but let window manager decide the size         :output: AX = window id, EBX = width, ECX = height, EDI = CurX, ESI = CurY
+;AH = 0x0A: draw a window but let the window manager control it (recommended)       output: EDI = pointer to window packet, AX = window ID
+;AH = 0x0B: remove the window, drawn by the window manager                          input: BX = window , EDI = window packet
+
 bits 32
 
 window_functions:
@@ -12,12 +14,16 @@ window_functions:
     je .draw_window
     cmp ah, 0x02
     je .rm_window
-    ret
+    cmp ah, 0x0a
+    je wndw_mngr_draw_window
+    cmp ah, 0x0b
+    je wndw_mngr_rm_window
+    iret
 
 .draw_window:
     pusha
     pusha
-    mov cx, 1
+    xor cx, cx
     mov edi, windows_list
 .search_free:
     mov al, [edi]
@@ -42,10 +48,24 @@ window_functions:
     mov [win_height], edx
     mov [win_color], ebx
 
+    mov eax, ecx
+    mov ebx, edx
+    mul ebx
+    movzx ebx, byte [bpp]
+    mul ebx
+
+    mov ecx, eax
+    mov ah, 0x0a
+    int 0x35
+
     movzx eax, word [window_id]
-    mov edi, window_buffer
-    imul eax, edi
-    mov edi, eax
+    imul eax, 8
+    add eax, win_buffers_list
+    mov [eax], esi
+    mov [eax+4], ecx
+
+    mov edi, esi
+    
     ;add X
     mov esi, [frame_buffer]
     mov ecx, [win_x]
@@ -224,15 +244,17 @@ window_functions:
     mov [win_y], eax
 
     movzx eax, bx
-    sub eax, 1
     mov edi, windows_list
     add edi, eax     ;add window ID
     mov byte [edi], 0
 
-    movzx ecx, bx
-    mov eax, window_buffer
-    mul ecx
-    mov esi, eax
+    movzx eax, bx
+    imul eax, 8
+    add eax, win_buffers_list
+    mov esi, [eax]
+    mov ecx, [eax+4]
+    mov ah, 0x0b
+    int 0x35        ;free buffer
 
     mov edi, [frame_buffer]
     mov eax, [win_x]
@@ -273,4 +295,22 @@ window_functions:
     iret
 
 
-window_buffer   equ     0x200000
+
+win_buffers_list:
+    ;max 10 windows at a time
+    ;window ID = Index of this list
+    ;list contains addresses to
+
+    ;buffers (4B) + 
+    ;size of window in bytes (4B)
+
+    ;dd *buffer
+    ;dd size
+
+    times 20 dd 0
+
+
+wndw_mngr_draw_window:
+    iret
+wndw_mngr_rm_window:
+    iret
