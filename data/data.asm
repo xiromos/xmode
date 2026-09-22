@@ -588,6 +588,8 @@ file_protocol_sys db    "PROTOCOLSYS"
 file_dhcp_sys db        "DHCP    SYS"
 dot_dot_entry db        "..         "
 idle_task_str db        "IDLE    SYS"
+file_ps2mouse_sys db    "PS2MOUSESYS"
+file_mouse_bmp db       "MOUSE   BMP"
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
@@ -610,6 +612,20 @@ win_pitch: dd 0
 win_rows: dd 0
 cust_height: dd 0
 win_buffer_addr: dd 0
+
+win_packet_list_size: dd 8*10
+win_packet_base: dd 0x1b0000
+; maximal number of windows = num_windows
+    times 8*10 dd 0
+    ; One Window Packet:
+    ; dd 0            ;foreground color
+    ; dd 0x00ffffff   ;background color
+    ; dd 300          ;width
+    ; dd 200          ;height
+    ; dd 300          ;CurX
+    ; dd 200          ;CurY
+    ; dd 300          ;original CurX
+    ; dd 200          ;original CurY
 
 task_count: dw 0
 max_tasks: dw 4
