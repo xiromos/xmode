@@ -1278,9 +1278,10 @@ kill_task_sh:
     ret
 
 .found:
-    mov bx, ax
-    mov ah, 0x06
-    call kill_task
+    movzx ebx, ax
+    xor esi, esi
+    mov ah, 0x04
+    int 0x35
     ret
 
 show_pci:
