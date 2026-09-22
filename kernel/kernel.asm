@@ -239,6 +239,13 @@ main:
     or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS | PAGE_USER
     call map_region
 
+    ;map window packet area as "read-only"
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_CACHE_DIS | PAGE_USER
+    mov eax, [win_packet_base]
+    mov ebx, [win_packet_list_size]
+    call map_region
+
     mov eax, rtc_handler
     mov ebx, 0x28
     call set_idt_entry
@@ -1071,11 +1078,32 @@ load_configs:
     int 0x33
     jc .error
 
+    xor ah, ah
+    mov edi, CONFIG_DIR_BUFFER
+    mov esi, file_mouse_bmp
+    mov bl, [drive_number]
+    int 0x33
+    jc .error
+
+    mov ah, 0x0a
+    int 0x35
+
+    mov dword [ps2_mouse_handler.mouse_bmp], esi
+
+    ;load MOUSE.BMP from configs directory
+    mov edx, CONFIG_DIR_BUFFER
+    mov edi, esi
+    mov esi, file_mouse_bmp
+    mov bl, [drive_number]
+    mov ah, 0x0a
+    int 0x33
+    jc .error
+
     ;load BGCOLOR.CFG from configs directory
     mov edx, CONFIG_DIR_BUFFER          ;from where to load
     mov edi, CONFIGS_FILE_BUFFER        ;where to load
     mov esi, file_bgcolor_cfg           ;what to load
-    mov bl, 0xff
+    mov bl, [drive_number]
     mov ah, 0x0a
     int 0x33
     jc .error
@@ -1362,6 +1390,7 @@ load_drivers:
     jc .drivers_dir_err
 
     call .check_sb16_soundcard
+    call .check_ps2_mouse
 .loop:
     cmp byte [ohci_found], 1
     je .found_ohci
@@ -1598,6 +1627,50 @@ load_drivers:
     in al, dx
     ret
 
+.check_ps2_mouse:
+    ;load driver file
+    mov esi, file_ps2mouse_sys
+    call load_driver_file
+    jc .no_ps2_mouse
+
+    call edi
+    jc .no_ps2_mouse
+
+    cli
+    mov byte [ps2_mouse_active], 1
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+    mov [ps2_mouse_handler.prev_bg], esi
+
+    mov edi, esi
+    mov esi, [frame_buffer]
+    mov eax, [ps2_mouse_handler.m_cur_x]
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+    add esi, eax
+
+    mov eax, [ps2_mouse_handler.m_cur_y]
+    imul eax, dword [pitch]
+    add esi, eax
+
+    mov edx, 16
+    imul ecx, 8
+.loop_buffer:
+    push ecx
+    rep movsb
+    pop ecx
+
+    sub esi, ecx
+    add esi, dword [pitch]
+
+    dec edx
+    jnz .loop_buffer
+.no_ps2_mouse:
+    sti
+    ret
+
+
 load_driver_file:
     ;Input: ESI = filename
     ;Output: EDI = startaddress
@@ -1807,6 +1880,7 @@ rtl8139_base: dd 0
 rtl8139_irq: db 0
 net_card_found: db 0
 net_stack_loaded: db 0
+ps2_mouse_active: db 0
 PIT_DIVISOR     equ 0x2e9c          ;10ms
 RTC_DIVISOR     equ 0x06            ;interrupt every 0,976ms
 ;memory map
