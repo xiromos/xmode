@@ -1,10 +1,10 @@
 ;=============================================================
 ;INT 0x34
 ;Syscall for drawing and deleting a window
-;AH = 0x1: draw a window                        ;input: ESI = X, EDI = Y, ECX = width, EDX = height, EBX = background color, EBP = pointer to title  output: EAX = window ID, EBX = CurX, ECX = CurY
+;AH = 0x1: draw a window                        ;input: ESI = X, EDI = Y, ECX = width, EDX = height, EBX = background color, EBP = pointer to title         output: EAX = window ID, EBX = CurX, ECX = CurY
 ;AH = 0x2: remove window                        ;input: EDI = window_packet, bx = window id
-;AH = 0x0A: draw a window but let the window manager control it (recommended)       output: EDI = pointer to window packet, AX = window ID
-;AH = 0x0B: remove the window, drawn by the window manager                          input: BX = window , EDI = window packet
+;AH = 0x0A: draw a window but let the window manager control it (recommended)       input: EBX = foreground color (text color), ECX = background color, ESI = pointer to max. 17 byte string (or zero the register, then window is untitled)      output: EDI = pointer to window packet, AX = window ID
+;AH = 0x0B: remove the window, drawn by the window manager                          input: BX = window ID, EDI = window packet
 
 bits 32
 
@@ -60,7 +60,7 @@ window_functions:
 
     movzx eax, word [window_id]
     imul eax, 8
-    add eax, win_buffers_list
+    add eax, win_buffers_list2
     mov [eax], esi
     mov [eax+4], ecx
 
@@ -250,7 +250,7 @@ window_functions:
 
     movzx eax, bx
     imul eax, 8
-    add eax, win_buffers_list
+    add eax, win_buffers_list2
     mov esi, [eax]
     mov ecx, [eax+4]
     mov ah, 0x0b
@@ -299,18 +299,603 @@ window_functions:
 win_buffers_list:
     ;max 10 windows at a time
     ;window ID = Index of this list
-    ;list contains addresses to
+    ;list contains addresses to buffers
 
-    ;buffers (4B) + 
-    ;size of window in bytes (4B)
-
+    ;dd buffer_size
     ;dd *buffer
-    ;dd size
+    ;dd *window_packet
+    ;dw 0       ;0 = free
+    ;times 18 db 0      (window title)
 
-    times 20 dd 0
+    times 10*32 dd 0
+
+win_buffers_list2: times 10*10 db 0
+max_win_buffers: dw 10
+frame_buffer_copy: dd 0
+num_displayed_win: dw 0     ;number of displayed windows
+WIN_BUFFERLIST_SIZE equ 32
 
 
 wndw_mngr_draw_window:
+    ;look for free place in win_buffer_list
+    pusha
+    cli
+    mov edx, ecx
+    movzx eax, word [current_task]
+    mov edi, win_buffers_list
+    mov ecx, [max_win_buffers]
+    cmp esi, 0xffffffff
+    je .loop
+    cmp esi, 0
+    jne .loop
+    mov esi, 0xffffffff
+.loop:
+    cmp word [edi+12], ax
+    je .error
+
+    add edi, WIN_BUFFERLIST_SIZE
+    dec ecx
+    jnz .loop
+
+    movzx eax, word [max_win_buffers]
+    mov edi, win_buffers_list
+    xor ecx, ecx
+.loop1:
+    cmp word [edi+12], 0
+    je .found_entry
+
+    add edi, WIN_BUFFERLIST_SIZE
+    dec eax
+    jnz .loop1
+    jmp .error
+
+.found_entry:
+    movzx eax, word [current_task]
+    mov [edi+12], ax ;mark as used
+    sti
+    push esi
+    movzx ebp, cx   ;store window ID
+
+    push ebx
+    push edx
+
+    xor edx, edx
+    mov eax, [real_width]
+    mov ebx, 8
+    div ebx
+
+    mov ecx, eax
+    mov eax, [real_height]
+    mov ebx, 16
+    div ebx
+
+    pop edx
+    pop ebx
+
+    imul eax, ecx
+    mov ecx, eax
+    shl ecx, 1      ;*2, because of UTF-16 characters
+    mov ah, 0x0a
+    int 0x35
+
+    push edi
+    push ecx
+    mov edi, esi
+    xor eax, eax
+    shr ecx, 2      ;/4
+    rep stosd
+    pop ecx
+    pop edi
+
+    mov [edi], ecx
+    mov [edi+4], esi    ;store buffer address
+
+    ;make window packet ready
+    mov esi, [win_packet_base]
+    mov ecx, [max_window_packets]
+.loop2:
+    cmp dword [esi+8], 0
+    je .free_window_packet
+
+    add esi, WIN_PACKET_SIZE
+    dec ecx
+    jnz .loop2
+
+    ;free heap and terminate program
+    mov ecx, [edi]
+    mov esi, [edi+4]
+    mov dword [edi], 0
+    mov dword [edi+4], 0
+    mov word [edi+12], 0
+
+    mov ah, 0x0b
+    int 0x35
+
+    mov ah, 0x05
+    int 0x35
+.free_window_packet:
+    cmp dword [esi+12], 0
+    jne .loop2
+
+    push edi
+    mov edi, esi
+    mov ecx, WIN_PACKET_SIZE
+    xor eax, eax
+    rep stosb
+    pop edi
+
+    mov [edi+8], esi
+    mov dword [esi], ebx    ;foreground color
+    mov dword [esi+4], edx  ;background color
+
+    cli
+    inc byte [num_displayed_win]
+    movzx eax, byte [num_displayed_win]
+    mov edx, esi
+    pop esi
+
+    ;copy title
+    push edi
+    push eax
+
+    add edi, 14
+    mov ecx, 17
+    cmp esi, 0xffffffff
+    jne .loop3
+
+    mov esi, untitled_str
+.loop3:
+    lodsb
+    cmp al, 0
+    je .copy_done
+    stosb
+    dec ecx
+    jnz .loop3
+    xor al, al
+.copy_done:
+    stosb
+    pop eax
+    pop edi
+
+    sti
+    call win_mngr_draw_window
+
+    cli
+    mov [.win_packet], edx
+    mov [.win_id], bp
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    mov edi, [.win_packet]
+    mov ax, [.win_id]
+
+    iret
+
+.win_packet: dd 0
+.win_id: dw 0
+
+.error:
+    popa
+    or dword [esp+8], 1
     iret
 wndw_mngr_rm_window:
     iret
+
+
+copy_back_window:
+    pusha
+    mov esi, [frame_buffer_copy]
+    mov edi, [frame_buffer]
+    mov ecx, [real_width]
+    imul ecx, dword [real_height]
+    movzx eax, byte [bpp]
+    imul ecx, eax
+
+    rep movsb
+
+    popa
+    ret
+
+store_back_window:
+    pusha
+    mov esi, [frame_buffer]
+    mov edi, [frame_buffer_copy]
+    mov ecx, [real_width]
+    imul ecx, dword [real_height]
+    movzx eax, byte [bpp]
+    imul ecx, eax
+
+    rep movsb
+
+    popa
+    ret
+
+
+
+win_mngr_draw_window:
+    ;EAX = number of displayed windows right now + 1
+
+    pusha
+    cmp eax, 1
+    je .win1
+    cmp eax, 2
+    je .win2
+    cmp eax, 3
+    je .win3
+    cmp eax, 4
+    je .win4
+
+    popa
+    stc
+    ret
+
+; #### DRAW 1 WINDOW ####
+.win1:
+    sti
+    call store_back_window
+    cli
+
+    mov edi, win_buffers_list
+    mov ecx, [max_win_buffers]
+.win1_loop:
+    cmp word [edi+12], 0
+    jne .win1_found
+
+    add edi, WIN_BUFFERLIST_SIZE
+    dec ecx
+    jnz .win1_loop
+
+    call copy_back_window
+    mov ah, 0x05
+    int 0x35
+.win1_found:
+    cli
+    ;draw full sized window at (1|20)
+    mov dword [.win_x], 1
+    mov dword [.win_y], 20
+
+    mov eax, [real_width]
+    sub eax, 2
+    mov [.width], eax
+    mov eax, [real_height]
+    sub eax, 21         ;20 because of header + 1 because of border
+    mov [.height], eax
+
+    ;fill window packet
+    call .fill_win_packet
+    call .draw_window
+    sti
+    jmp .done
+
+; #### DRAW 2 WINDOWS ####
+.win2:
+    call copy_back_window
+
+    cli
+    mov edi, win_buffers_list
+    mov ecx, [max_win_buffers]
+    xor ebx, ebx
+    ;search for first window
+.win2_loop:
+    cmp word [edi+12], 0
+    jne .win2_found1
+
+    add edi, WIN_BUFFERLIST_SIZE
+    inc ebx
+    dec ecx
+    jnz .win2_loop
+    call copy_back_window
+    jmp .done
+
+.win2_found1:
+    push edi
+    push ecx
+    push ebx
+
+    ;draw first window at (1|20)
+    mov dword [.win_x], 1
+    mov dword [.win_y], 20
+
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 2      ;leave space for border
+    mov [.width], eax
+
+    mov eax, [real_height]
+    sub eax, 21
+    mov [.height], eax
+
+    call .fill_win_packet
+    call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
+
+    pop ebx
+    pop ecx
+    pop edi
+
+    add edi, WIN_BUFFERLIST_SIZE
+.win2_loop2:
+    cmp word [edi+12], 0
+    jne .win2_found2
+
+    add edi, WIN_BUFFERLIST_SIZE
+    inc ebx
+    dec ecx
+    jnz .win2_loop2
+    call copy_back_window
+    jmp .done
+.win2_found2:
+
+    ;draw second window at (width/2|20)
+    mov eax, [real_width]
+    shr eax, 1  ;width/2
+    inc eax     ;1px for border
+    mov [.win_x], eax
+    mov dword [.win_y], 20
+
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 2      ;leave space for border
+    mov [.width], eax
+
+    mov eax, [real_height]
+    sub eax, 21
+    mov [.height], eax
+
+    call .fill_win_packet
+    call .draw_window
+
+    jmp .done
+.win3:
+    call copy_back_window
+    cli
+    hlt
+    jmp .done
+.win4:
+    jmp .done
+
+.done:
+    popa
+    clc
+    ret
+
+.win_x: dd 0
+.win_y: dd 0
+.width: dd 0
+.height: dd 0
+
+.fill_win_packet:
+    ;EDI = pointer to entry in win_buffers_list
+    ;returns background color of window in EBX
+    ;set ESI to *title
+
+    mov esi, [edi+8]
+    mov eax, [.width]
+    mov [esi+8], eax
+    mov eax, [.height]
+    mov [esi+12], eax
+    mov eax, [.win_x]
+    mov [esi+16], eax
+    mov [esi+24], eax
+    mov ebx, [.win_y]
+    mov [esi+20], ebx
+    mov [esi+28], ebx
+
+    mov ebx, [esi+4]    ;color
+
+    mov esi, edi
+    add esi, 14
+    ret
+.draw_window:
+    ;expects filled win_x, win_y, widht, height
+    ;EBX = color
+    ;ESI = *title
+
+    pusha
+    push esi
+    mov esi, ebx
+    mov eax, [.win_x]
+    mov ebx, [.win_y]
+    mov ecx, [.width]
+    mov edx, [.height]
+    call draw_rectangle
+
+    mov eax, [.win_x]
+    sub eax, 1
+    mov ebx, [.win_y]
+    sub ebx, 20
+    mov ecx, [.width]
+    add ecx, 2
+    mov edx, 20
+
+    mov esi, [win_border_color]
+    call draw_rectangle
+    pop esi
+
+    push dword [cur_x]
+    push dword [cur_y]
+
+    mov eax, [.win_x]
+    add eax, 2
+    mov [cur_x], eax
+
+    mov eax, [.win_y]
+    sub eax, 17
+    mov [cur_y], eax
+
+    mov ebx, 0x00ffffff
+    cmp esi, 0xffffffff
+    jne .skip
+
+    mov esi, untitled_str
+.skip:
+    call print_string
+    pop eax
+    pop ebx
+    mov [cur_y], eax
+    mov [cur_x], ebx
+
+    mov edi, [frame_buffer]
+    movzx eax, byte [bpp]
+    mov ebx, [.win_x]
+    sub ebx, 1
+    imul eax, ebx
+    add edi, eax
+
+    mov eax, [.win_y]
+    imul eax, dword [pitch]
+    add edi, eax
+
+    mov esi, [win_border_color]
+    mov eax, [.width]
+    movzx ebx, byte [bpp]
+    imul eax, ebx
+
+    cmp ebx, 3
+    je .bits24
+
+    mov ecx, [.height]
+.loop:
+    mov [edi], esi
+    add edi, ebx
+    add edi, eax
+    mov [edi], esi
+
+    add edi, dword [pitch]
+    sub edi, eax
+    sub edi, ebx
+
+    dec ecx
+    jnz .loop
+
+    mov ecx, [.width]
+    add ecx, 2
+.last_row:
+    mov [edi], esi
+    add edi, ebx
+    dec ecx
+    jnz .last_row
+
+    popa
+    ret
+
+
+.bits24:
+    mov ecx, [.height]
+    mov bx, si
+    shr esi, 16
+    xchg bx, si
+.loop2:
+    mov [edi], si
+    mov [edi+2], bl
+
+    add edi, 3
+    add edi, eax
+    mov [edi], si
+    mov [edi+2], bl
+
+    add edi, dword [pitch]
+    sub edi, eax
+    sub edi, 3
+
+    dec ecx
+    jnz .loop2
+
+    mov ecx, [.width]
+    add ecx, 2
+.last_row2:
+    mov [edi], si
+    mov [edi+2], bl
+    add edi, 3
+    dec ecx
+    jnz .last_row2
+
+    sti
+    popa
+    ret
+
+draw_rectangle:
+    ;EAX = X
+    ;EBX = Y
+    ;ECX = width
+    ;EDX = height
+    ;ESI = color
+    pusha
+    cmp ecx, 0
+    je .error
+    cmp edx, 0
+    je .error
+
+    mov edi, [frame_buffer]
+
+    push ecx
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+    pop ecx
+
+    add edi, eax    ;add X
+
+    mov eax, [pitch]
+    imul ebx, eax
+    
+    add edi, ebx    ;add Y
+
+    cmp byte [bpp], 3
+    je .bit24
+
+    mov ebp, ecx
+    movzx eax, byte [bpp]
+.loop:
+    mov [edi], esi
+    add edi, eax
+    dec ecx
+    jnz .loop
+
+    mov ecx, ebp
+    push eax
+    imul eax, ecx
+    sub edi, eax
+    pop eax
+
+    add edi, dword [pitch]
+    dec edx
+    jnz .loop
+
+    popa
+    clc
+    ret
+
+.bit24:
+    mov ebp, ecx
+    mov eax, 3
+    mov bx, si
+    shr esi, 16
+    xchg bx, si
+.loop2:
+    mov [edi], si
+    mov [edi+2], bl
+    add edi, 3
+    dec ecx
+    jnz .loop2
+
+    mov ecx, ebp
+    mov eax, ecx
+    imul eax, 3
+    sub edi, eax
+
+    add edi, dword [pitch]
+    dec edx
+    jnz .loop2
+
+    popa
+    clc
+    ret
+
+.error:
+    popa
+    stc
+    ret
