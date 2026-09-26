@@ -270,6 +270,7 @@ start_task_bg2:
     and dword [esp+8], 0xfffffffe
     iret
 .too_much_tasks:
+    pop eax
     popa
     or dword [esp+8], 1
     iret
@@ -374,6 +375,7 @@ start_task_fg2:
     and dword [esp+8], 0xfffffffe
     iret
 .too_much_tasks:
+    pop eax
     popa
     or dword [esp+8], 1
     iret
@@ -907,6 +909,7 @@ start_task_bg:
     mov edx, ebx
     mov bl, [drive_number]
     int 0x33
+    jc .coff_error
 
     push esi
     call load_coff_obj
@@ -1008,6 +1011,8 @@ start_task_bg:
     and dword [esp+8], 0xfffffffe
     iret
 .too_much_tasks:
+    pop ebx
+    pop esi
     popa
     or dword [esp+8], 1
     iret
