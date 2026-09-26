@@ -22,7 +22,20 @@
 ;       dd CurY
 ;AH = 0x0B:     print char with custom CurX and CurY - increases X and Y
 ;   AL: character
-;   EDI: pointer to structure
+;   EDI: pointer to window packet
+;AH = 0x1A:     print string into window, drawn by window manager
+;   ESI = pointer to string
+;   EDI = pointer to window packet
+;   BX = WINDOW ID
+;AH = 0x1B:     print single char into window, drawn by window manager
+;   AL = char
+;   BX = WINDOW ID
+;AH = 0x1C:     add +16 to CurY in window packet
+;   EDI = window packet
+;   BX = window ID
+;AH = 0x1E:     fill window with background color (window_packet+4)
+;   EDI = window packet
+;   BX = window ID
 ;=======================================================
 
 output_handler:
@@ -46,6 +59,16 @@ output_handler:
     je .print_dec_custom
     cmp ah, 0x0e
     je .custom_clear
+
+    cmp ah, 0x1a
+    je print_string_winmngr
+    cmp ah, 0x1b
+    je print_char_winmngr
+    cmp ah, 0x1c
+    je print_newline_winmngr
+    cmp ah, 0x1e
+    je winmngr_clear_window
+
     popa
     iret
 .print_string:
@@ -136,6 +159,9 @@ output_handler:
     popa
     iret
 
+
+; PRINT STRING
+
 .print_string_custom:
     ;ESI: pointer to null-terminated string
     ;EDI: pointer to structure
@@ -160,6 +186,11 @@ output_handler:
 .done_print_str:
     popa
     iret
+
+
+
+; PRINT CHAR
+
 .print_char_custom:
     mov ebx, [edi]
     mov [color], ebx
@@ -167,6 +198,8 @@ output_handler:
     mov [char_bgcolor], ebx
     cmp al, 0x0a
     je .char_newline
+    cmp al, 0x08
+    je .backspace
 
     call draw_char_custom
 
@@ -180,25 +213,48 @@ output_handler:
 .char_newline:
     mov eax, [edi+24]
     mov dword [edi+16], eax
-    add dword [edi+20], 24    ;font is 8x16
+    add dword [edi+20], 32    ;font is 8x16
     mov eax, [edi+12]
     add eax, [edi+28]
     cmp dword [edi+20], eax
     jae .custom_scroll
-    sub dword [edi+20], 8
+    sub dword [edi+20], 16
 .char_done:
     popa
     iret
+.backspace:
+    mov eax, [edi+16]
+    sub eax, 8
+    cmp eax, dword [edi+24]
+    jl .char_done
+
+    sub dword [edi+16], 8
+    jmp .char_done
 .custom_scroll:
     call custom_scroll
-    sub dword [edi+20], 24
+    sub dword [edi+20], 32
     jmp .char_done
+
+
+; PRINT NEWLINE
+
 .print_newline_custom:
+    mov eax, [edi+24]
+    mov dword [edi+16], eax
+    add dword [edi+20], 32    ;font is 8x16
+    mov eax, [edi+12]
+    add eax, [edi+28]
+    cmp dword [edi+20], eax
+    jae .custom_scroll
+    sub dword [edi+20], 16
     popa
     iret
 .print_dec_custom:
     popa
     iret
+
+
+; CLEAR WINDOW
 
 .custom_clear:
     mov esi, [frame_buffer]
@@ -239,6 +295,9 @@ output_handler:
     popa
     iret
 
+
+; PRINT CHAR FUNCTION (for .print_string_custom)
+
 print_char_custom:
     cmp al, 0x0a
     je .newline
@@ -254,19 +313,20 @@ print_char_custom:
 .newline:
     mov eax, [edi+24]
     mov dword [edi+16], eax
-    add [edi+20], dword 24
+    add dword [edi+20], 32
     mov eax, [edi+12]
     add eax, [edi+28]
     cmp dword [edi+20], eax
     jae .scroll
-    sub dword [edi+20], 8
+    sub dword [edi+20], 16
 .done:
     ret
 .scroll:
     call custom_scroll
-    sub dword [edi+20], 24
+    sub dword [edi+20], 32
     jmp .done
 custom_scroll:
+    cli
     pusha
     mov eax, [edi+4]
     mov [win_color], eax
@@ -314,7 +374,6 @@ custom_scroll:
     mov ecx, [win_pitch]
     dec eax
     jnz .loop
-
     mov ecx, [win_width]
     mov esi, [win_color]
     movzx edx, byte [bpp]
@@ -332,7 +391,13 @@ custom_scroll:
     jnz .loop2
     
     popa
+    sti
     ret
+
+
+
+; DRAW CHAR
+
 draw_char_custom:
     ;    dd color
     ;    dd bgcolor
@@ -440,4 +505,230 @@ draw_char_custom:
     popa
     ; cli
     ; hlt
+    ret
+
+
+;######################################################################################
+;############################ PRINT FUNCTIONS FOR WINDOWS #############################
+;######################################################################################
+
+; PRINT STRING
+
+print_string_winmngr:
+    ;ESI: pointer to null-terminated string
+    ;EDI: pointer to window packet
+    ;    dd color
+    ;    dd bgcolor
+    ;    dd width
+    ;    dd height
+    ;    dd CurX        / WinX when clearing screen
+    ;    dd CurY        / WinY when clearing screen
+    ;    dd original CurX
+    ;    dd original CurY
+    ;BX = WIN ID
+
+    cmp bx, word [max_win_buffers]
+    jae .done
+
+    mov eax, [edi]
+    mov [color], eax
+    mov eax, [edi+4]
+    mov [char_bgcolor], eax
+
+    movzx ecx, bx
+    imul ecx, WIN_BUFFERLIST_SIZE
+    add ecx, win_buffers_list
+    call winbuffer_set_pos
+
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+
+    mov [ecx], al
+    inc ecx
+    push ecx
+    call print_char_custom
+    pop ecx
+    jmp .loop
+.done:
+    popa
+    iret
+
+; PRINT CHAR
+
+print_char_winmngr:
+    cmp bx, word [max_win_buffers]
+    jae .done
+
+    movzx ecx, bx
+    imul ecx, WIN_BUFFERLIST_SIZE
+    add ecx, win_buffers_list
+    call winbuffer_set_pos
+
+    mov ebx, [edi]
+    mov [color], ebx
+    mov ebx, [edi+4]
+    mov [char_bgcolor], ebx
+    cmp al, 0x0a
+    je .char_newline
+    cmp al, 0x08
+    je .backspace
+
+    mov [ecx], al
+
+    call draw_char_custom
+
+    add dword [edi+16], 16
+    mov eax, [edi+8]
+    add eax, [edi+24]
+    cmp dword [edi+16], eax
+    jae .char_newline
+    sub dword [edi+16], 8
+    jmp .done
+.char_newline:
+    mov [ecx], al
+
+    mov eax, [edi+24]
+    mov dword [edi+16], eax
+    add dword [edi+20], 32    ;font is 8x16
+    mov eax, [edi+12]
+    add eax, [edi+28]
+    cmp dword [edi+20], eax
+    jae .custom_scroll
+    sub dword [edi+20], 16
+.done:
+    popa
+    iret
+.backspace:
+    dec ecx
+    mov byte [ecx], 0
+
+    mov eax, [edi+16]
+    sub eax, 8
+    cmp eax, dword [edi+24]
+    jl .done
+
+    sub dword [edi+16], 8
+    jmp .done
+.custom_scroll:
+    call custom_scroll
+    sub dword [edi+20], 32
+    jmp .done
+
+
+; PRINT NEWLINE
+
+print_newline_winmngr:
+    cmp bx, word [max_win_buffers]
+    jae .done
+
+    movzx ecx, bx
+    imul ecx, WIN_BUFFERLIST_SIZE
+    add ecx, win_buffers_list
+    call winbuffer_set_pos
+    mov byte [ecx], 0x0a
+
+    mov eax, [edi+24]
+    mov dword [edi+16], eax
+    add dword [edi+20], 32    ;font is 8x16
+    mov eax, [edi+12]
+    add eax, [edi+28]
+    cmp dword [edi+20], eax
+    jae print_char_winmngr.custom_scroll
+    sub dword [edi+20], 16
+.done:
+    popa
+    iret
+
+
+; CLEAR WINDOW
+
+winmngr_clear_window:
+    cmp bx, word [max_win_buffers]
+    jae .done
+
+    movzx ecx, bx
+    imul ecx, WIN_BUFFERLIST_SIZE
+    add ecx, win_buffers_list
+
+    push edi
+    mov edi, [ecx+4]
+    mov ecx, [ecx]
+    shr ecx, 2
+    xor eax, eax
+    rep stosd
+    pop edi
+
+    mov esi, [frame_buffer]
+    mov eax, [edi+24]           ;window X
+    movzx ebx, byte [bpp]
+    imul eax, ebx
+    add esi, eax
+    mov eax, [edi+28]           ;window Y
+    imul eax, [pitch]
+    add esi, eax
+
+    mov eax, [edi+8]
+    movzx ebx, byte [bpp]
+    imul eax, ebx
+    mov [win_pitch], eax
+
+    mov ecx, [edi+8]            ;width
+    mov eax, [edi+12]           ;height
+    mov edx, [edi+4]            ;color
+    movzx ebx, byte [bpp]
+.clear_loop:
+    mov [esi], edx
+    add esi, ebx
+    dec ecx
+    jnz .clear_loop
+
+    add esi, [pitch]
+    mov ecx, [win_pitch]
+    sub esi, ecx
+    mov ecx, [edi+8]
+    dec eax
+    jnz .clear_loop
+
+    mov eax, [edi+24]
+    mov [edi+16], eax
+    mov eax, [edi+28]
+    mov [edi+20], eax
+.done:
+    popa
+    iret
+
+
+winbuffer_set_pos:
+    ;ECX = pointer to entry in win_buffers_list
+    ;sets ECX to the end of char list, for example:
+    ;0x1000: 20 41 42 43 44 20 00
+    ;                          ↑↑
+    ;               (set ECX to this position)
+
+    push esi
+    push eax
+    mov esi, [ecx+4]
+    mov ecx, [ecx]
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+
+    dec ecx
+    jnz .loop
+
+    pop eax
+    pop esi
+    mov ecx, 0xf0000000      ;set ECX to random address so it cant overwrite root directory at 0x00000000
+    stc
+    ret
+
+.done:
+    mov ecx, esi
+    dec ecx
+    pop eax
+    pop esi
+    clc
     ret
