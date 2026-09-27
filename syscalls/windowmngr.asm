@@ -345,6 +345,7 @@ wndw_mngr_draw_window:
     je .found_entry
 
     add edi, WIN_BUFFERLIST_SIZE
+    inc ecx
     dec eax
     jnz .loop1
     jmp .error
@@ -529,7 +530,9 @@ win_mngr_draw_window:
     stc
     ret
 
-; #### DRAW 1 WINDOW ####
+; ########################
+; #### DRAW 1 WINDOW #####
+; ########################
 .win1:
     sti
     call store_back_window
@@ -567,7 +570,10 @@ win_mngr_draw_window:
     sti
     jmp .done
 
+; ########################
 ; #### DRAW 2 WINDOWS ####
+; ########################
+
 .win2:
     call copy_back_window
 
@@ -650,11 +656,149 @@ win_mngr_draw_window:
     call .draw_window
 
     jmp .done
+
+; ########################
+; #### DRAW 3 WINDOWS ####
+; ########################
+
 .win3:
     call copy_back_window
+
     cli
-    hlt
+    mov edi, win_buffers_list
+    mov ecx, [max_win_buffers]
+    xor ebx, ebx
+    ;search for first window
+.win3_loop:
+    cmp word [edi+12], 0
+    jne .win3_found1
+
+    add edi, WIN_BUFFERLIST_SIZE
+    inc ebx
+    dec ecx
+    jnz .win3_loop
+    call copy_back_window
     jmp .done
+
+.win3_found1:
+    push edi
+    push ecx
+    push ebx
+
+    ;draw first window at (1|20)
+    mov dword [.win_x], 1
+    mov dword [.win_y], 20
+
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 2      ;leave space for border
+    mov [.width], eax
+
+    mov eax, [real_height]
+    sub eax, 21
+    mov [.height], eax
+
+    call .fill_win_packet
+    call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
+
+    pop ebx
+    pop ecx
+    pop edi
+    
+    add edi, WIN_BUFFERLIST_SIZE
+.win3_loop2:
+    cmp word [edi+12], 0
+    jne .win3_found2
+
+    add edi, WIN_BUFFERLIST_SIZE
+    inc ebx
+    dec ecx
+    jnz .win3_loop2
+    call copy_back_window
+    jmp .done
+.win3_found2:
+
+    push edi
+    push ecx
+    push ebx
+
+    ;draw second window at (width/2|20)
+    mov eax, [real_width]
+    shr eax, 1  ;width/2
+    inc eax     ;1px for border
+    mov [.win_x], eax
+    mov dword [.win_y], 20
+
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 2      ;leave space for border
+    mov [.width], eax
+
+    mov eax, [real_height]
+    shr eax, 1      ;/2
+    sub eax, 21
+    mov [.height], eax
+
+    call .fill_win_packet
+    call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
+
+    pop ebx
+    pop ecx
+    pop edi
+
+    add edi, WIN_BUFFERLIST_SIZE
+.win3_loop3:
+    cmp word [edi+12], 0
+    jne .win3_found3
+
+    add edi, WIN_BUFFERLIST_SIZE
+    inc ebx
+    dec ecx
+    jnz .win3_loop3
+    call copy_back_window
+    jmp .done
+.win3_found3:
+
+    ;draw third window at (width/2|height/2-20)
+    mov eax, [real_width]
+    shr eax, 1  ;width/2
+    inc eax     ;1px for border
+    mov [.win_x], eax
+
+    mov eax, [real_height]
+    shr eax, 1
+    add eax, 20
+    mov dword [.win_y], eax
+
+    mov eax, [real_width]
+    shr eax, 1      ;/2
+    sub eax, 2      ;leave space for border
+    mov [.width], eax
+
+    mov eax, [real_height]
+    shr eax, 1      ;/2
+    sub eax, 21
+    mov [.height], eax
+
+    call .fill_win_packet
+    call .draw_window
+
+    jmp .done
+
+; ########################
+; #### DRAW 4 WINDOWS ####
+; ########################
+
 .win4:
     jmp .done
 
