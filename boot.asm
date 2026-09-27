@@ -49,20 +49,98 @@ _efi_main:
     dec rcx
     jnz .loop
 
+    ; #### open file /XCONFIGS/BOOT.CFG to check, if to ask for screen resolution yes or no ####
+    mov rax, [rel system_table]
+    mov rax, [rax+SYSTEM_TABLE.BOOT_SERVICES]       ;BootServices
+    lea rcx, [rel sfs_guid]
+    xor rdx, rdx
+    lea r8, [rel simple_fs]
+
+    sub rsp, 40
+    call qword [rax+BOOT_SERVICES.LOCATE_PROTOCOL]
+    add rsp, 40
+
+    test rax, rax
+    jnz .no_bootservices
+
+    ;open root
+    mov rcx, [rel simple_fs]
+    lea rdx, [rel root]
+
+    sub rsp, 40
+    call qword [rcx+8]
+    add rsp, 40
+
+    test rax, rax
+    jnz .root_failed
+
+    mov rcx, [rel root]
+    lea rdx, [rel cfg_file]
+    lea r8, [rel cfg_bin]
+    mov r9, 1       ;EFI_FILE_MODE_READ
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jnz .no_file_found
+
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel cfg_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jnz .no_file_found
+
+    mov rax, [rel file_info+8]
+    mov [rel cfg_size], rax
+
+    mov rcx, [rel cfg_file]
+    lea rdx, [rel cfg_size]
+    mov r8, 0x8000      ;buffer - load file at 0x8000
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+
+    mov rsi, 0x8000
+    call parse_cfg_file
+
+    cmp ah, 1
+    jne .xga_res
+
+    ; #### list all screen resolutions ####
+
+    lea rsi, [rel resolution_str]
+    call print_string
+
     mov rbx, [rel gop]
     mov rax, [rbx+24]       ;mode
 
     mov ecx, [rax]          ;max mode
     xor esi, esi
+    mov r15, 'a'
+    lea rdi, [rel res_buffer]
 .search_loop:
     cmp esi, ecx
-    jge .no_xga
+    jge .ask
 
     mov rcx, [rel gop]
     mov edx, esi
     lea r8, [rel info_size]
     lea r9, [rel info_ptr]
 
+    push rdi
     mov rdi, rcx
 
     sub rsp, 40
@@ -70,20 +148,105 @@ _efi_main:
     add rsp, 40
 
     mov rcx, rdi
+    pop rdi
 
     test rax, rax
     jnz .next_mode
 
+    push rsi
+    push rcx
+
+    mov rax, r15
+    call print_char
+    mov ax, ':'
+    call print_char
+
     mov rdx, [rel info_ptr]
+    push rdx
     mov eax, [rdx+4]            ;width
-    cmp eax, 1024               ;search for XGA resolution
-    jne .next_mode
+    stosd
+    push rdi
+    call print_dec
+
+    mov ax, 'x'
+    call print_char
+    pop rdi
+    pop rdx
+    push rdi
 
     mov eax, [rdx+8]            ;height
-    cmp eax, 768
-    jne .next_mode
+    pop rdi
+    stosd
+    push rdi
+    call print_dec
 
-    ;found
+    mov ax, 0x0a
+    call print_char
+    mov ax, 0x0d
+    call print_char
+
+    pop rdi
+    pop rcx
+    pop rsi
+
+    cmp r15, 'z'
+    jne .skip
+
+    mov r15, 'A'
+    dec r15
+.skip:
+    inc r15
+
+    jmp .next_mode
+.ask:
+    ;get keypress
+    push r15
+    sub rsp, 40
+
+    ;clear key buffer
+    mov rax, [rel system_table]
+    mov rcx, [rax+48]
+    xor rdx, rdx
+    call qword [rcx]
+    add rsp, 40
+
+.wait_loop:
+    sub rsp, 40
+    mov rax, [rel system_table]
+    mov rcx, [rax+48]
+    lea rdx, [rel efi_input_key]
+    call qword [rcx+8]
+    add rsp, 40
+
+    test rax, rax
+    jnz .wait_loop
+
+    movzx rax, word [rel efi_input_key+2]   ;char
+    pop r15
+
+    cmp rax, 0x0d
+    je .xga_res
+
+    cmp rax, 0x41
+    jb .ask
+    cmp rax, 0x5a
+    ja .check_little
+
+    sub rax, 0x41
+    jmp .table
+
+.check_little:
+    cmp rax, 0x7a
+    ja .ask
+
+    sub rax, 0x61
+    add rax, 26
+
+.table:
+    lea rbx, [rel keymap]
+    movzx rbx, byte [rbx+rax]
+    mov esi, ebx
+
     mov rcx, [rel gop]
     mov edx, esi
 
@@ -95,9 +258,7 @@ _efi_main:
 
     mov rcx, rdi
 
-    test rax, rax
-    jnz .no_xga
-
+.get_video_data:
     mov rbx, [rel gop]
     mov rbx, [rbx+24]
 
@@ -285,6 +446,59 @@ _efi_main:
 .next_mode:
     inc rsi
     jmp .search_loop
+.next_mode2:
+    inc rsi
+    jmp .search_loop2
+.xga_res:
+    mov rbx, [rel gop]
+    mov rax, [rbx+24]       ;mode
+
+    mov ecx, [rax]          ;max mode
+    xor esi, esi
+.search_loop2:
+    cmp esi, ecx
+    jge .no_xga
+
+    mov rcx, [rel gop]
+    mov edx, esi
+    lea r8, [rel info_size]
+    lea r9, [rel info_ptr]
+
+    mov rdi, rcx
+
+    sub rsp, 40
+    call qword [rcx]
+    add rsp, 40
+
+    mov rcx, rdi
+
+    test rax, rax
+    jnz .next_mode2
+
+    mov rdx, [rel info_ptr]
+    mov eax, [rdx+4]            ;width
+    cmp eax, 1024               ;search for XGA resolution
+    jne .next_mode2
+
+    mov eax, [rdx+8]            ;height
+    cmp eax, 768
+    jne .next_mode2
+
+    ;found
+    mov rcx, [rel gop]
+    mov edx, esi
+
+    mov rdi, rcx
+
+    sub rsp, 40
+    call qword [rcx+8]          ;SetMode
+    add rsp, 40
+
+    mov rcx, rdi
+
+    test rax, rax
+    jnz .no_xga
+    jmp .get_video_data
 .failed:
     mov ecx, 0xaaaaaaaa         ;debug
     mov ebx, 0x77777777
@@ -332,6 +546,61 @@ print_string:
     add rsp, 40
 
     ret
+
+print_char:
+    lea rsi, [rel char]
+    mov [rsi], ax
+    call print_string
+    ret
+print_dec:
+    mov rbp, rsp
+    mov rbx, [rel system_table]
+    sub rsp, 64
+
+    lea rdi, [rbp-2]
+    mov word [rdi], 0
+    mov r8, 10
+.loop:
+    xor rdx, rdx
+    div r8
+    add dx, '0'
+    sub rdi, 2
+    mov [rdi], dx
+    test rax, rax
+    jnz .loop
+
+    mov r12, [rbx+64]
+    mov rcx, r12    ;Arg 1
+    mov rdx, rdi    ;Arg 2
+    call [r12+8]    ;OutputString
+
+    mov rsp, rbp
+    ret
+
+parse_cfg_file:
+    ;RSI = address of file
+    ;returns the number, given in boot.cfg in AH
+
+    lodsb
+    cmp al, 0x20
+    je parse_cfg_file
+    cmp al, 0
+    je .done
+    cmp al, '#'
+    je .skip_comment
+
+    sub al, 0x30
+    mov ah, al
+    jmp parse_cfg_file
+.done:
+    ret
+.skip_comment:
+    lodsb
+    cmp al, 0x0a
+    je parse_cfg_file
+    cmp al, 0
+    je .done
+    jmp .skip_comment
 
 get_vendor:
     mov rax, [rel system_table]
@@ -435,12 +704,16 @@ no_xga_str: dw 'N','o',' ','X','G','A',' ','f','o','u','n','d',0
 xmode_bin: dw '\','X','M','O','D','E','.','B','I','N'
 xmode_file: dq 0
 xmode_size: dq 0
+cfg_bin: dw '\','X','C','O','N','F','I','G','S','\','B','O','O','T','.','C','F','G', 0
+cfg_file: dq 0
+cfg_size: dq 0
 bootservices_fail: dw 'N','o',' ','B','o','o','t',' ','S','e','r','v','i', 'c','e','s',' ','f','o','u','n','d',0
 root_failed_str: dw 'F','a','i','l','e','d',' ','t','o',' ','o','p','e','n',' ','r','o','o','t',0
 file_not_found: dw 'K','e','r','n','e','l',' ','n','o','t',' ','f','o','u','n','d',0
 kernel_found_str: dw 'K','e','r','n','e','l',' ','l','o','a','d','e','d', 0
 mmap_error: dw 'M','m','a','p',' ','n','o','t',' ','f','o','u','n','d',0
 exit_error: dw 'E','r','r','o','r',' ','w','h','i','l','e',' ','j','u','m','p','i','n','g',' ','t','o',' ','k','e','r','n','e','l', 0
+resolution_str: dw 'C','h','o','o','s','e',' ','a',' ','r','e','s','o','l','u','t','i','o','n', 0x0a, 0x0d, 0
 newline: dw 0x0d, 0x0a, 0
 
 mmap_size dq 65536
@@ -450,10 +723,16 @@ map_key         dq 0
 desc_size       dq 0
 desc_ver        dd 0
 
-file_info: times 32 db 0
-
 MEM_MAP_ADDR            equ 0x70000
 
+keymap:
+    db 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
+    db 37, 38, 39, 40, 41, 42, 43, 44, 45, 46
+    db 47, 48, 49, 50, 51,
+
+    db 0, 1,  2,  3,  4,  5,  6,  7,  8,  9, 10
+    db 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    db 21, 22, 23, 24, 25,
 section .bss
 kernel_packet:
     resq 1        ;pointer to buffer with firmware vendor
@@ -466,3 +745,10 @@ kernel_packet:
     resd 1        ;width
     resd 1        ;height
     resd 1        ;bytes per pixel
+
+char: resd 1
+res_buffer: resd 64*8
+efi_input_key: resd 1    ;WORD: special keys, WORD: char
+event_ptr: resq 1        ;pointer to WaitForKey event
+event_index: resq 1
+file_info: resb 80
