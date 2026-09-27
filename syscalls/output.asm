@@ -566,10 +566,13 @@ print_char_winmngr:
     add ecx, win_buffers_list
     call winbuffer_set_pos
 
+    push ebx
     mov ebx, [edi]
     mov [color], ebx
     mov ebx, [edi+4]
     mov [char_bgcolor], ebx
+    pop ebx
+
     cmp al, 0x0a
     je .char_newline
     cmp al, 0x08
@@ -612,7 +615,11 @@ print_char_winmngr:
     sub dword [edi+16], 8
     jmp .done
 .custom_scroll:
-    call custom_scroll
+    movzx ecx, bx
+    imul ecx, WIN_BUFFERLIST_SIZE
+    add ecx, win_buffers_list
+
+    call scroll_winmngr
     sub dword [edi+20], 32
     jmp .done
 
@@ -731,4 +738,117 @@ winbuffer_set_pos:
     pop eax
     pop esi
     clc
+    ret
+
+scroll_winmngr:
+    ;ECX = pointer to entry in win_buffers_list structure
+    ;EDI = *window_packet
+    cli
+    pusha
+    push edi
+
+    ;first remove the first line in the buffer
+    mov esi, ecx
+    mov edi, [esi+8]    ;window packet
+
+    mov eax, [edi+8]    ;get window width
+    shr eax, 3          ;/8
+    mov ebx, eax
+
+    mov ecx, eax
+    mov ebp, esi        ;EBP = points to entry in win_buffer_list
+    mov esi, [esi+4]
+    mov edi, esi
+    mov ebx, 1
+.loop3:
+    lodsb
+    cmp al, 0x0a
+    je .end_line
+    cmp al, 0
+    je .error
+
+    inc ebx
+    dec ecx
+    jnz .loop3
+.end_line:
+    mov ecx, [ebp]
+.loop4:
+    lodsb
+    stosb
+    cmp al, 0
+    je .end
+    dec ecx
+    jnz .loop4
+.end:
+    mov ecx, ebx
+    xor al, al
+    rep stosb       ;clear the end of the buffer
+
+.error:
+    pop edi
+
+    mov eax, [edi+4]
+    mov [win_color], eax
+    mov eax, [edi+12]
+    mov [cust_height], eax
+
+    mov eax, [edi+8]
+    mov [win_width], eax
+    movzx ebx, byte [bpp]
+    mul ebx
+    mov [win_pitch], eax
+
+    mov eax, [edi+12]
+    mov ebx, 16
+    div ebx
+    mov [win_rows], eax
+
+    mov esi, [frame_buffer]
+    mov eax, [edi+24]       ;original X
+    movzx ebx, byte [bpp]
+    mul ebx
+    add esi, eax
+
+    mov eax, [edi+28]       ;original Y
+    imul eax, [pitch]
+    add esi, eax
+
+    mov edi, esi
+    ;source = framebuffer + 16
+    mov eax, 16
+    imul eax, [pitch]
+    add esi, eax
+
+    ;size = pitch * (height - 16)
+    mov eax, [cust_height]
+    sub eax, 16
+
+    mov ecx, [win_pitch]
+.loop:
+    rep movsb
+    add esi, [pitch]
+    sub esi, [win_pitch]
+    add edi, [pitch]
+    sub edi, [win_pitch]
+    mov ecx, [win_pitch]
+    dec eax
+    jnz .loop
+    mov ecx, [win_width]
+    mov esi, [win_color]
+    movzx edx, byte [bpp]
+    mov eax, 16
+.loop2:
+    mov [edi], esi
+    add edi, edx
+    dec ecx
+    jnz .loop2
+
+    add edi, [pitch]
+    sub edi, [win_pitch]
+    mov ecx, [win_width]
+    dec eax
+    jnz .loop2
+    
+    popa
+    sti
     ret
