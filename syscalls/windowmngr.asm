@@ -432,6 +432,12 @@ wndw_mngr_draw_window:
     cli
     inc byte [num_displayed_win]
     movzx eax, byte [num_displayed_win]
+    cmp eax, 1
+    jne .skip
+
+    call store_back_window
+    cli
+.skip:
     mov edx, esi
     pop esi
 
@@ -478,8 +484,6 @@ wndw_mngr_draw_window:
 .error:
     popa
     or dword [esp+8], 1
-    iret
-wndw_mngr_rm_window:
     iret
 
 
@@ -534,8 +538,6 @@ win_mngr_draw_window:
 ; #### DRAW 1 WINDOW #####
 ; ########################
 .win1:
-    sti
-    call store_back_window
     cli
 
     mov edi, win_buffers_list
@@ -567,6 +569,11 @@ win_mngr_draw_window:
     ;fill window packet
     call .fill_win_packet
     call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
     sti
     jmp .done
 
@@ -654,6 +661,11 @@ win_mngr_draw_window:
 
     call .fill_win_packet
     call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
 
     jmp .done
 
@@ -792,6 +804,11 @@ win_mngr_draw_window:
 
     call .fill_win_packet
     call .draw_window
+
+    mov esi, [edi+4]    ;*buffer
+    mov edi, [edi+8]    ;*window_packet
+    mov ah, 0x0a
+    int 0x30
 
     jmp .done
 
@@ -1043,3 +1060,69 @@ draw_rectangle:
     popa
     stc
     ret
+
+
+wndw_mngr_rm_window:
+;   BX = window ID
+;   EDI = window packet
+
+    pusha
+    movzx esi, bx
+    imul esi, WIN_BUFFERLIST_SIZE
+    add esi, win_buffers_list
+
+    mov ax, [current_task]
+    cmp [esi+12], ax
+    jne .error
+
+    cli
+    ;free window buffer
+    mov edi, esi
+    mov esi, [edi+4]
+    mov ecx, [edi]
+    mov ah, 0x0b
+    int 0x35
+
+    mov dword [edi], 0
+    mov dword [edi+4], 0
+
+    ;clear field "PID" and clear window title
+    mov word [edi+12], 0
+    push edi
+    add edi, 12
+    xor ax, ax
+    mov ecx, 18/2
+    rep stosw
+    pop edi
+
+    ;free window packet
+    mov esi, [edi+8]
+    mov dword [edi+8], 0
+    mov edi, esi
+    mov ecx, WIN_PACKET_SIZE
+    xor al, al
+    rep stosb
+
+    dec byte [num_displayed_win]
+    movzx eax, byte [num_displayed_win]
+    cmp eax, 0
+    je .no_window
+
+    sti
+    call win_mngr_draw_window
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.no_window:
+    sti
+    call copy_back_window
+    
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
