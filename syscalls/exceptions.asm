@@ -307,82 +307,174 @@ irq0_handler:
 
     ;unknown attribute
     jmp .continue
+
+;##################################################################################
+;###################### PS/2 SCANCODE SET 1 INTERRUPT HANDLER #####################
+;##################################################################################
+
 irq1_handler:
     cli
-    push ebx
     push edi
+    push esi
+    push eax
+    push ebx
     push ecx
-    xor ecx, ecx
+
     in al, 0x60
-    mov ah, al
+    cmp al, 0xe0
+    je .extended
 
-    cmp al, 0xaa
-    je .no_shift
-    cmp al, 0xb6
-    je .no_shift
+    test al, 0x80
+    jnz .key_up
 
-    cmp al, 0x80
-    jae .done
-
-    cmp al, 0x2a
-    je .shift
-    cmp al, 0x36
-    je .shift
-    cmp al, 0xb6
-    je .no_shift
-    jmp .continue
-
-.shift:
-    mov byte [shift], 1
+    call .upd_report
+    mov byte [.ext], 0
+    jmp .end
+.extended:
+    mov byte [.ext], 1
     jmp .done
-.no_shift:
-    mov byte [shift], 0
-    jmp .done
-.continue:
-    cmp al, 0
-    je .done
-
-    cmp byte [shift], 1
-    je .get_shift
-
-    movzx ebx, al
-    mov al, [scan_codes+ebx]
-    jmp .save
-.get_shift:
-    movzx ebx, al
-    mov al, [keymap_shift+ebx]
-.save:
-    ; mov ebx, [buf_head]
-    ; mov [key_buffer+ebx], al
-    ; inc ebx
-    ; and ebx, 255
-    ; mov [buf_head], ebx
+.key_up:
+    and al, 0x7f
+    call .upd_report_release
+    mov byte [.ext], 0
+.end:
     movzx edi, word [main_task]
     mov ebx, edi
+
     imul edi, KEY_BUFFER_SIZE
     add edi, KEY_BUFFER
+    movzx ecx, byte [BUFFER_HEAD+ebx]
+    add edi, ecx
+
+    mov esi, .keybuffer
+    mov al, [esi]
+    mov [edi], al
+    
+    inc edi
+    inc esi
+
+    mov ecx, 6
+    cld
+    rep movsb
 
     movzx ecx, byte [BUFFER_HEAD+ebx]
-    mov [edi+ecx], al
-    inc cl
-
+    add ecx, 7
+    and ecx, 0xff
     mov [BUFFER_HEAD+ebx], cl
 .done:
-    push ax
     mov al, 0x20
     out 0x20, al
-    pop ax
-.end:
+
     pop ecx
-    pop edi
     pop ebx
+    pop eax
+    pop esi
+    pop edi
     iret
 
+.ext: db 0
+.release: db 0
+.keybuffer: times 7 db 0
+.upd_report:
+    cmp al, 0x2a
+    je .lshift
+    cmp al, 0x36
+    je .rshift
+    cmp al, 0x1d
+    je .ctrl
+    cmp al, 0x38
+    je .alt
+
+    mov ecx, 6
+    mov ebx, 1
+.search:
+    cmp byte [.keybuffer+ebx], 0
+    je .insert
+    cmp byte [.keybuffer+ebx], al
+    je .done2
+    inc ebx
+    loop .search
+.done2:
+    ret
+
+.insert:
+    mov [.keybuffer+ebx], al
+    ret
+.lshift:
+    or byte [.keybuffer], (1 << 1)
+    ret
+.rshift:
+    or byte [.keybuffer], (1 << 5)
+    ret
+.ctrl:
+    cmp byte [.ext], 1
+    je .rctrl
+    or byte [.keybuffer], (1 << 0)
+    ret
+.rctrl:
+    or byte [.keybuffer], (1 << 4)
+    ret
+.alt:
+    cmp byte [.ext], 1
+    je .r_alt
+
+    or byte [.keybuffer], (1 << 2)
+    ret
+.r_alt:
+    or byte [.keybuffer], (1 << 6)
+    ret
+
+.upd_report_release:
+    cmp al, 0x2a
+    je .clear_lshift
+    cmp al, 0x36
+    je .clear_rshift
+    cmp al, 0x1d
+    je .clear_ctrl
+    cmp al, 0x38
+    je .clear_alt
+
+    mov ecx, 6
+    mov ebx, 1
+.search2:
+    cmp byte [.keybuffer+ebx], al
+    je .rm
+    inc ebx
+    loop .search2
+    ret
+.rm:
+    mov byte [.keybuffer+ebx], 0
+    ret
+
+.clear_lshift:
+    and byte [.keybuffer], ~(1 << 1)
+    ret
+.clear_rshift:
+    and byte [.keybuffer], ~(1 << 5)
+    ret
+.clear_ctrl:
+    cmp byte [.ext], 1
+    je .clear_rctrl
+
+    and byte [.keybuffer], ~(1 << 0)
+    ret
+.clear_rctrl:
+    and byte [.keybuffer], ~(1 << 4)
+    ret
+.clear_alt:
+    cmp byte [.ext], 1
+    je .clear_r_alt
+
+    and byte [.keybuffer], ~(1 << 2)
+    ret
+.clear_r_alt:
+    and byte [.keybuffer], ~(1 << 6)
+    ret
 ;##################################################################################
 ;################################# INT 0x31 #######################################
 ;##################################################################################
 
-;AH = 0x00:     wait for keypress       :output: AL = Unicode char, AH = Xiromos Key Code (from keycode_table), DL = modifier keys (bit 0: L CTRL, bit 1: L SHFT, bit 2: L ALT, bit 3: WINDOWS, bit 4: R CTRL, bit 5: R SHFT, bit 6: R ALT (ALT Gr), bit 7: R WINDOWS)
+;AH = 0x00:     wait for keypress       :output: AL = ASCII char, AH = Xiromos Key Code (from keycode_table), DL = modifier keys (bit 0: L CTRL, bit 1: L SHFT, bit 2: L ALT, bit 3: WINDOWS, bit 4: R CTRL, bit 5: R SHFT, bit 6: R ALT (ALT Gr), bit 7: R WINDOWS)
 
 keyboard_handler:
     cmp ah, 0
@@ -393,71 +485,21 @@ keyboard_handler:
     push ebx
     push edi
     push ecx
-
-    cmp byte [usb_keyboard_used], 1
-    je .usb_keyboard
+    push esi
 
 .block:
-    movzx ecx, word [main_task]
-    mov bx, [current_task]
-    cmp bx, [main_task]
-    jne .sleep
-
-    cli
-    movzx ebx, byte [BUFFER_TAIL+ecx]
-    movzx eax, byte [BUFFER_HEAD+ecx]
-    sti
-
-    cmp bl, al
-    je .sleep
-
-    mov edi, ecx
-    imul edi, KEY_BUFFER_SIZE
-    add edi, KEY_BUFFER
-
-    mov al, [edi+ebx]
-    inc byte [BUFFER_TAIL+ecx]
-
-    cmp al, 0x8b
-    jne .skip1
-
-    cmp byte [.task_switch], 1
-    je .skip1
-
-    mov byte [.task_switch], 1
-    call switch_tasks
-    mov byte [.task_switch], 0
-    jmp .block
-.skip1:
-
-    ;key scancodes and modifier keys for PS/2 keyboards are not supported yet
-    xor dl, dl
-    xor ah, ah
-
-    pop ecx
-    pop edi
-    pop ebx
-    iret
-
-.sleep:
-    sti
-    hlt
-    jmp .block
-
-.usb_keyboard:
     movzx ebx, word [main_task]
     movzx ecx, word [current_task]
     cmp cx, [main_task]
-    jne .sleep_usb
+    jne .sleep
 
     cli
-    mov al, [BUFFER_TAIL+ebx]
-    mov cl, [BUFFER_HEAD+ebx]
+    mov al, [BUFFER_TAIL+ecx]
+    mov cl, [BUFFER_HEAD+ecx]
     sti
 
     cmp al, cl
-    je .sleep_usb
-
+    je .sleep
 
     mov edi, ebx
     imul edi, KEY_BUFFER_SIZE
@@ -466,16 +508,35 @@ keyboard_handler:
     movzx ecx, byte [BUFFER_TAIL+ebx]
     add edi, ecx
 
-    mov dl, [edi]   ;modifier
-
     push ebx
-    test byte [edi], (1 << 1)       ;left shift
+    mov dl, [edi]   ;modifier
+    movzx ebx, byte [edi+1]
+
+.end:
+    test dl, (1 << 1)       ;left shift
     jnz .shift
-    test byte [edi], (1 << 5)       ;right shift
+    test dl, (1 << 5)       ;right shift
     jnz .shift
 
-    movzx ebx, byte [edi+1] ;Key1
+    cmp byte [usb_keyboard_used], 1
+    je .skip
+    movzx eax, byte [scan_codes+ebx]
+    mov ah, [scan_codes.keycode_table+ebx]
+    jmp .get_key_done
+.skip:
     movzx eax, byte [usb_keymap+ebx]
+    mov ah, [usb_keymap.keycode_table+ebx]
+    jmp .get_key_done
+.shift:
+    cmp byte [usb_keyboard_used], 1
+    je .shift_usb
+    movzx eax, byte [keymap_shift+ebx]
+
+    mov ah, [scan_codes.keycode_table+ebx]
+    jmp .get_key_done
+.shift_usb:
+    movzx eax, byte [usb_keymap.shift+ebx]
+
     mov ah, [usb_keymap.keycode_table+ebx]
 .get_key_done:
     pop ebx
@@ -485,7 +546,7 @@ keyboard_handler:
     mov [BUFFER_TAIL+ebx], cl
 
     cmp byte [edi+1], 0
-    je .sleep_usb
+    je .sleep
 
     cmp al, 0x8b
     jne .skip2
@@ -496,53 +557,223 @@ keyboard_handler:
     mov byte [.task_switch], 1
     call switch_tasks
     mov byte [.task_switch], 0
-    jmp .usb_keyboard
+    jmp .block
 .skip2:
 
+    movzx ecx, word [current_task]
+    imul ecx, 7
+    add ecx, dword [global_key_buffers]
+    mov [ecx], dl
+    mov edx, ecx
+    mov esi, ecx
+
+    xchg esi, edi
+    inc edi
+    inc esi
+    mov ecx, 6
+    push eax
+    cmp byte [usb_keyboard_used], 1
+    je .usb_save
+
+.loop:
+    lodsb
+    movzx ebx, al
+    mov al, [scan_codes.keycode_table+ebx]
+    stosb
+    dec ecx
+    jnz .loop
+    jmp .done
+.usb_save:
+    lodsb
+    movzx ebx, al
+    mov al, [usb_keymap.keycode_table+ebx]
+    stosb
+    dec ecx
+    jnz .usb_save
+.done:
+    pop eax
+    pop esi
     pop ecx
     pop edi
     pop ebx
     iret
-.sleep_usb:
-    sti
-    hlt
-    jmp .usb_keyboard
-.task_switch: db 0
-.shift:
-    movzx ebx, byte [edi+1]
-    movzx eax, byte [usb_keymap.shift+ebx]
-
-    mov ah, [usb_keymap.keycode_table+ebx]
-    jmp .get_key_done
-
-keyboard_handler2:
-    cli
-    cmp ah, 0
-    je .get_key
-    iret
-
-.get_key:
-    push ebx
-.block:
-    cli
-    mov ebx, [buf_tail]
-    mov eax, [buf_head]
-    sti
-
-    cmp ebx, eax
-    je .sleep
-    mov al, [key_buffer+ebx]
-
-    inc ebx
-    and ebx, 255
-    mov [buf_tail], ebx
-
-    pop ebx
-    iret
 
 .sleep:
+    sti
     hlt
     jmp .block
+; keyboard_handler:
+;     cmp ah, 0
+;     je .get_key
+;     iret
+
+; .get_key:
+;     push ebx
+;     push edi
+;     push ecx
+;     push esi
+
+; .block:
+;     movzx ebx, word [main_task]
+;     movzx ecx, word [current_task]
+;     cmp cx, [main_task]
+;     jne .sleep
+
+;     cli
+;     mov al, [BUFFER_TAIL+ecx]
+;     mov cl, [BUFFER_HEAD+ecx]
+;     sti
+
+;     cmp al, cl
+;     je .sleep
+
+;     cli
+;     mov edi, ebx
+;     imul edi, KEY_BUFFER_SIZE
+;     add edi, KEY_BUFFER
+
+;     movzx ecx, byte [BUFFER_TAIL+ebx]
+;     add edi, ecx
+
+;     mov ecx, 1
+; .scan:
+;     movzx edx, byte [edi+ecx]
+;     cmp dl, 0
+;     je .next
+
+;     push ecx
+;     mov esi, 1
+; .check_prev:
+;     cmp byte [.prev_report+esi], dl
+;     je .pressed
+;     inc esi
+;     cmp esi, 7
+;     jl .check_prev
+
+;     pop ecx
+;     mov ebx, edx
+;     mov dl, [edi]
+;     jmp .translate
+; .pressed:
+;     pop ecx
+; .next:
+;     inc ecx
+;     cmp ecx, 7
+;     jl .scan
+
+;     call .update_report
+;     movzx ebx, word [main_task]
+;     movzx ecx, byte [BUFFER_TAIL+ebx]
+;     add ecx, 7
+;     and ecx, 0xff
+;     mov [BUFFER_TAIL+ebx], cl
+;     jmp .block
+; .translate:
+;     test dl, (1 << 1)       ;left shift
+;     jnz .shift
+;     test dl, (1 << 5)       ;right shift
+;     jnz .shift
+
+;     cmp byte [usb_keyboard_used], 1
+;     je .skip
+;     movzx eax, byte [scan_codes+ebx]
+;     mov ah, [scan_codes.keycode_table+ebx]
+;     jmp .get_key_done
+; .skip:
+;     movzx eax, byte [usb_keymap+ebx]
+;     mov ah, [usb_keymap.keycode_table+ebx]
+;     jmp .get_key_done
+; .shift:
+;     cmp byte [usb_keyboard_used], 1
+;     je .shift_usb
+;     movzx eax, byte [keymap_shift+ebx]
+
+;     mov ah, [scan_codes.keycode_table+ebx]
+;     jmp .get_key_done
+; .shift_usb:
+;     movzx eax, byte [usb_keymap.shift+ebx]
+
+;     mov ah, [usb_keymap.keycode_table+ebx]
+; .get_key_done:
+;     movzx ebx, word [main_task]
+;     movzx ecx, byte [BUFFER_TAIL+ebx]
+;     add ecx, 7
+;     and ecx, 0xff
+;     mov [BUFFER_TAIL+ebx], cl
+
+;     cmp al, 0x8b
+;     jne .skip2
+
+;     cmp byte [.task_switch], 1
+;     je .skip2
+
+;     mov byte [.task_switch], 1
+;     call switch_tasks
+;     mov byte [.task_switch], 0
+;     call .update_report
+;     jmp .block
+; .skip2:
+;     call .update_report
+
+;     movzx ecx, word [current_task]
+;     imul ecx, 7
+;     add ecx, dword [global_key_buffers]
+;     mov [ecx], dl
+;     mov edx, ecx
+;     mov esi, ecx
+
+;     xchg esi, edi
+;     inc edi
+;     inc esi
+;     mov ecx, 6
+;     push eax
+;     cmp byte [usb_keyboard_used], 1
+;     je .usb_save
+
+; .loop:
+;     lodsb
+;     movzx ebx, al
+;     mov al, [scan_codes.keycode_table+ebx]
+;     stosb
+;     dec ecx
+;     jnz .loop
+;     jmp .done
+; .usb_save:
+;     lodsb
+;     movzx ebx, al
+;     mov al, [usb_keymap.keycode_table+ebx]
+;     stosb
+;     dec ecx
+;     jnz .usb_save
+; .done:
+;     pop eax
+;     pop esi
+;     pop ecx
+;     pop edi
+;     pop ebx
+;     iret
+
+; .sleep:
+;     sti
+;     hlt
+;     jmp .block
+; .update_report:
+;     ;EDI = current key report
+;     push edi
+;     push esi
+;     push ecx
+;     mov esi, edi
+;     mov edi, .prev_report
+;     mov ecx, 7
+;     cld
+;     rep movsb
+;     pop ecx
+;     pop esi
+;     pop edi
+;     ret
+.prev_report: times 7 db 0
+.task_switch: db 0
+
 irq7_handler:
     iret
 
@@ -656,6 +887,7 @@ switch_tasks:
     mov al, 0x20
     out 0x20, al
     cli
+.done2:
     mov bx, [switch_tasks_win_id]
     mov ah, 0x02
     mov edi, switch_tasks_window
@@ -677,24 +909,8 @@ switch_tasks:
 .switch_task:
     cli
     mov [main_task], ax
+    jmp .done2
 
-    mov bx, [switch_tasks_win_id]
-    mov ah, 0x02
-    mov edi, switch_tasks_window
-    int 0x34
-    sti
-
-    mov eax, [real_width]
-    shr eax, 1      ;/2
-    sub eax, 250
-    mov dword [edi+16], eax
-
-    mov eax, [real_height]
-    shr eax, 1
-    sub eax, 150
-    mov dword [edi+20], eax
-    popa
-    ret
 irq14_handler:
     cli
     pusha
