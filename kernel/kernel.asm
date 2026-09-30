@@ -224,6 +224,10 @@ main:
 .overflow:
     mov dword [.usable_mem], 0xffffffff ;over 4GB
 .continue1:
+    mov eax, cr0
+    and eax, ~(1 << 16)     ;remove write protect bit
+    mov cr0, eax
+
     call set_pages
 
     mov eax, [real_width]
@@ -243,7 +247,20 @@ main:
     xor ecx, ecx
     or ecx, PAGE_PRESENT | PAGE_CACHE_DIS | PAGE_USER
     mov eax, [win_packet_base]
-    mov ebx, [win_packet_list_size]
+    mov ebx, 4096
+    call map_region
+    
+    mov edi, [win_packet_base]
+    mov ecx, [max_window_packets]
+    imul ecx, WIN_PACKET_SIZE
+    shr ecx, 2
+    xor eax, eax
+    rep stosd
+
+    mov eax, [global_key_buffers]
+    mov ebx, 0x1000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_CACHE_DIS | PAGE_USER
     call map_region
 
     mov eax, rtc_handler
@@ -267,6 +284,15 @@ main:
 
     call init_heap
 
+    mov ecx, [real_width]
+    mov edx, [real_height]
+    imul ecx, edx
+    movzx edx, byte [bpp]
+    imul ecx, edx
+    mov ah, 0x0a
+    int 0x35
+    mov [frame_buffer_copy], esi
+
     ;0xFFFFFFFF = white
     ;0x00FF0000 = red
     ;0x11111111 = dark gray
@@ -288,6 +314,11 @@ main:
     mov edx, [bm_base]
     call print_hex8
 
+    mov ebx, init_system
+    mov esi, program_init_sys
+    mov ah, 0x13
+    int 0x35
+
     ; INIT FIRST TASK (SLOT 0)
     mov edi, tasks_esp
     cli
@@ -300,11 +331,8 @@ main:
 
     mov dword [edi+19], 0xfffffffe
 
-    mov ah, 0x0a
-    mov ecx, 128
-    int 0x35
-
     mov ebp, esp
+    mov esi, [idle_task_stack]
     mov esp, esi
 
     push ss
@@ -323,11 +351,6 @@ main:
 
     mov esp, ebp
     sti
-
-    mov ebx, init_system
-    mov esi, program_init_sys
-    mov ah, 0x13
-    int 0x35
     
     mov al, 0x20
     call print_char
@@ -1295,6 +1318,8 @@ map_region:
     ret
 
 idle_task:
+    nop
+    nop
     nop
     nop
     int 0x20
