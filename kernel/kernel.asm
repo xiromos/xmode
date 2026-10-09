@@ -311,69 +311,7 @@ main:
     call print_string
 
     call scan_disk_pci
-    mov edx, [bm_base]
-    call print_hex8
-
-    mov ebx, init_system
-    mov esi, program_init_sys
-    mov ah, 0x13
-    int 0x35
-
-    ; INIT FIRST TASK (SLOT 0)
-    mov edi, tasks_esp
-    cli
-    ; init idle task
-    push edi
-    mov esi, idle_task_str
-    mov ecx, 11
-    rep movsb
-    pop edi
-
-    mov dword [edi+19], 0xfffffffe
-
-    mov ebp, esp
-    mov esi, [idle_task_stack]
-    mov esp, esi
-
-    push ss
-    push esp
-    push dword 0x202
-    push cs
-    push dword idle_task
-
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
-
-    mov dword [edi+15], esp
-
-    mov esp, ebp
-    sti
-    
-    mov al, 0x20
-    call print_char
-
-    mov edx, [abar]
-    call print_hex8
-
-    mov al, 0x20
-    call print_char
-
-    mov edx, [ohci_base]
-    call print_hex8
-    call print_newline
-
     call search_boot_device
-
-    ;test write with DMA
-    mov edi, 0x8000
-    mov ebx, 4
-    mov ecx, 100
-    mov ah, 0x13
-    ;int 0x32
-
     call get_bpb_data
 
     mov ax, [root_entries]
@@ -416,7 +354,74 @@ main:
     div ebx
     mov [subdir_entries], ax
 
+    call load_driver_assets
+    jc .skip_drivers
+    call scan_pci_driver
+.skip_drivers:
+
     call load_drivers
+    mov edx, [bm_base]
+    call print_hex8
+
+    ; INIT FIRST TASK (SLOT 0)
+    mov edi, tasks_esp
+    cli
+    ; init idle task
+    push edi
+    mov esi, idle_task_str
+    mov ecx, 11
+    rep movsb
+    pop edi
+
+    mov dword [edi+19], 0xfffffffe
+
+    mov ebp, esp
+    mov esi, [idle_task_stack]
+    mov esp, esi
+
+    push ss
+    push esp
+    push dword 0x202
+    push cs
+    push dword idle_task
+
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+
+    mov dword [edi+15], esp
+
+    mov esp, ebp
+    sti
+
+    mov ebx, init_system
+    mov esi, program_init_sys
+    mov ah, 0x13
+    int 0x35
+    
+    mov al, 0x20
+    call print_char
+
+    mov edx, [abar]
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov edx, [ohci_base]
+    call print_hex8
+    call print_newline
+
+    ;test write with DMA
+    mov edi, 0x8000
+    mov ebx, 4
+    mov ecx, 100
+    mov ah, 0x13
+    ;int 0x32
+
+    ;call load_drivers
 
     call load_configs
     jc .config_err
@@ -636,429 +641,6 @@ load_fat:
     jc rsod
     ret
 
-
-scan_disk_pci:
-    mov byte [avail_disks], 2
-    xor ebx, ebx
-    mov edi, 0x8a000
-.bus_loop:
-    cmp byte [pci_bus], 255
-    jae .done
-    mov byte [pci_device], 0
-.device_loop:
-    cmp byte [pci_device], 32
-    jae .next_bus
-    mov byte [pci_function], 0
-.function_loop:
-    cmp byte [pci_function], 8
-    jae .next_device
-
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-    
-    mov ebx, eax
-    ;push eax
-    call pci_read
-    ;pop eax
-
-    cmp ax, 0xffff
-    je .skip
-
-    cmp ax, 0x10ec  ;Realtek Semiconductor Co., Ltd.
-    je .vendor_realtek
-
-    push ax
-    mov al, [pci_bus]
-    stosb
-    mov al, [pci_device]
-    stosb
-    mov al, [pci_function]
-    stosb
-    xor al, al
-    stosb       ;padding
-    pop ax
-
-    stosd
-
-    push eax
-
-    mov ecx, ebx
-    mov eax, ebx
-    or eax, 0x08
-    call pci_read
-    
-    stosd
-    mov byte [edi], 0x0a
-    inc edi
-
-    pop edx
-    ;DX = vendors...
-
-    mov ebx, eax
-    mov eax, ecx
-
-    ;class
-    mov edx, ebx
-    shr edx, 24
-
-    cmp dl, 0x01
-    je .ahci_ide
-
-    cmp dl, 0x04
-    je .multimedia
-
-    cmp dl, 0x0c
-    je .serial_bus_controller
-
-    jmp .skip
-    ;sub class
-.ahci_ide:
-    mov edx, ebx
-    shr edx, 16
-    cmp dl, 0x6     ;AHCI
-    je .found_ahci
-    cmp dl, 0x01
-    je .found_ide       ;IDE
-    jmp .skip
-.serial_bus_controller:
-    mov edx, ebx
-    shr edx, 16
-    cmp dl, 0x03
-    je .usb
-
-    jmp .skip
-.multimedia:
-    mov edx, ebx
-    shr edx, 16
-    cmp dl, 0x03        ;audio device
-    je .found_audiodev
-    jmp .skip
-.found_ide:
-    cmp byte [ide_found], 1
-    je .skip
-
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    mov ecx, eax
-    or eax, 0x04
-    call pci_read
-    or eax, 0x0007
-    and eax, ~(1 << 10) ;rm Bit 10 (interrupt disable)
-
-    mov ebx, eax
-    mov eax, ecx
-    or eax, 0x04
-    call pci_write
-
-    call read_bar4
-
-    call ide_init
-    mov byte [ide_found], 1       ;block initialization of other IDE controllers
-    jmp .skip
-.found_ahci:
-    mov edx, ebx
-    shr edx, 8
-    cmp dl, 0x01        ;Programming Interface
-    jne .skip
-
-    cmp byte [ahci_found], 1
-    je .skip
-
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    mov ecx, eax
-    or eax, 0x04
-    call pci_read
-    or eax, 0x07
-    and eax, ~(1 << 10)
-    mov ebx, eax
-    mov eax, ecx
-    add eax, 0x04
-    call pci_write
-
-    call read_bar5
-
-    mov eax, ecx
-    or eax, 0x3c
-    call pci_read
-
-    and eax, 0xff
-    add al, 0x20
-
-    movzx ebx, al
-    mov eax, ahci_interrupt_handler
-    call set_irq
-
-    mov byte [ahci_found], 1
-    call ahci_init
-    jmp .next_device
-.usb:
-    mov edx, ebx
-    shr edx, 8
-    cmp dl, 0
-    je .uhci
-    cmp dl, 0x10
-    je .ohci
-    cmp dl, 0x20
-    je .ehci
-    cmp dl, 0x30
-    je .xhci
-    jmp .next_device
-
-.uhci:
-    jmp .next_device
-.ohci:
-    cmp byte [ohci_found], 1
-    je .skip
-
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    mov ecx, eax
-
-    call read_bar0
-    and eax, 0xfffffff0
-    mov [ohci_base], eax
-    
-    push ebx
-    push ecx
-    mov ebx, 0x2000
-    xor ecx, ecx
-    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
-    call map_region
-    pop ecx
-    pop ebx
-
-    mov eax, ecx
-    add eax, 4
-
-    call pci_read
-    mov ebx, eax
-    and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
-
-    mov eax, ecx
-    add eax, 4
-    call pci_write
-
-    ;get IRQ
-    mov eax, ecx
-    add eax, 0x3c
-    call pci_read
-
-    add al, 0x20
-    movzx ebx, al
-    mov eax, ohci_interrupt_handler
-    call set_irq
-
-    ;call get_ohci_devices
-    mov byte [ohci_found], 1
-    jmp .next_device
-.ehci:
-    jmp .next_device
-.xhci:
-    jmp .next_device
-.found_audiodev:
-    mov byte [intel_hd_audio], 1
-
-    call get_pci_addr
-
-    call read_bar0
-    mov [intel_audiodev_base], eax
-
-    xor ecx, ecx
-    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
-    mov ebx, 0x1000
-    call map_region
-
-    jmp .next_device
-
-.next_device:
-    inc byte [pci_device]
-    jmp .device_loop
-.skip:
-    inc byte [pci_function]
-    jmp .function_loop
-.next_bus:
-    inc byte [pci_bus]
-    jmp .bus_loop
-.done:
-    mov byte [edi], '$'
-    mov byte [ide_running], 0
-    ret
-;######################################################################################
-;################################# PCI VENDORS ########################################
-;######################################################################################
-.vendor_realtek:
-    shr eax, 16
-    cmp ax, 0x8139
-    je .found_rtl8139
-    cmp ax, 0x8169
-    je .found_rtl_8169
-    jmp .next_device
-.found_rtl8139:
-    mov byte [rtl8139_found], 1     ;found network card
-
-    call get_pci_addr
-
-    call read_bar0
-    ;and eax, 0xfffffffe
-    mov [rtl8139_base], eax          ;bit 1 = 1: IO-Port, bit 1 = 0: MMIO
-    ; mov ebx, 0x1000
-    ; xor ecx, ecx
-    ; or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
-    ; call map_region
-
-    mov eax, ecx
-    add eax, 0x04
-    call pci_read
-
-    or eax, (1 << 2)        ;activate busmastering bit
-    or eax, (1 << 0)        ;activate DMA
-    and eax, ~(1 << 10)     ;enable interrupts
-    mov ebx, eax
-    mov eax, ecx
-    add eax, 0x04
-    call pci_write
-
-    mov eax, ecx
-    add eax, 0x3c
-    call pci_read
-
-    add al, 0x20
-    mov [rtl8139_irq], al
-    jmp .next_device
-.found_rtl_8169:
-    jmp .next_device
-;######################################################################################
-;################################# PCI FUNCTIONS ######################################
-;######################################################################################
-pci_read:
-    ;EAX = PCI adress
-    mov dx, 0xcf8
-    out dx, eax
-    mov dx, 0xcfc
-    in eax, dx
-    ret
-pci_write:
-    ;EAX = PCI adress
-    ;EBX = content
-    mov dx, 0xcf8
-    out dx, eax
-
-    mov dx, 0xcfc
-    mov eax, ebx
-    out dx, eax
-    ret
-read_bar4:
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    or eax, 0x20
-    call pci_read
-
-    test eax, 1
-    jnz .io
-    xor eax, eax
-    ret
-.io:
-    and eax, 0xfffffffc
-    mov [bm_base], eax
-    mov [bm_base4], ax
-    ret
-
-read_bar5:
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    or eax, 0x24
-    call pci_read
-
-    and eax, 0xfffffff0     ;remove flags
-    mov [abar], eax         ;AHCI Base Address Register
-
-    push ebx
-    push ecx
-    mov ebx, 0x2000
-    xor ecx, ecx
-    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
-    call map_region
-    pop ecx
-    pop ebx
-
-    ;activate global AHCI interrupts
-    mov eax, [abar]
-    mov ebx, [eax+4]
-    or ebx, (1 << 1)
-    mov [eax+4], ebx
-
-    ret
-read_bar0:
-    ;outputs value in EAX
-    add eax, 0x10
-    call pci_read
-    ret
 search_boot_device:
     mov byte [boot_drive], 2
     mov byte [drive_number], 2
@@ -1072,25 +654,8 @@ init_system:
 
     mov ah, 0x05
     int 0x35
-get_pci_addr:
-    ;Output: ECX / EAX = PCI Address
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    mov ecx, eax
     ret
 
-;######################################################################################
 load_configs:
     ;load configs directory
     mov esi, dir_configs_str
@@ -1405,124 +970,198 @@ init_rtc:
     ret
 
 load_drivers:
-    ;load drivers directory
-    mov esi, dir_drivers_str
-    mov edi, DIR_DRIVERS_ADDR
-    mov edx, root_addr
-    mov bl, [drive_number]
-    mov ah, 0x0a
-    int 0x33
-    jc .drivers_dir_err
-
     call .check_sb16_soundcard
     call .check_ps2_mouse
-.loop:
-    cmp byte [ohci_found], 1
-    je .found_ohci
-    cmp byte [intel_hd_audio], 1
-    ;je .found_intel_audiodev
-    cmp byte [rtl8139_found], 1
-    je .found_rtl8139
-
-    cmp byte [net_card_found], 1
-    jne .skip_net
-
-    call load_network_stack
-.skip_net:
     ret
-;######################################################################################
-;################################ OHCI CONTROLLER #####################################
-;######################################################################################
-.found_ohci:
-    mov byte [ohci_found], 0
-    mov esi, file_ohci_sys
-    mov edi, OHCI_DRIVER_ADDR
-    mov edx, DIR_DRIVERS_ADDR
-    mov ah, 0x0a
-    mov bl, [drive_number]
-    int 0x33
+;     ;load drivers directory
+;     mov esi, dir_drivers_str
+;     mov edi, DIR_DRIVERS_ADDR
+;     mov edx, root_addr
+;     mov bl, [drive_number]
+;     mov ah, 0x0a
+;     int 0x33
+;     jc .drivers_dir_err
 
-    mov eax, [ohci_base]
-    call dword OHCI_DRIVER_ADDR
-    cmp ah, 0
-    je .loop
+; .loop:
+;     cmp byte [ohci_found], 1
+;     je .found_ohci
+;     cmp byte [intel_hd_audio], 1
+;     ;je .found_intel_audiodev
+;     cmp byte [rtl8139_found], 1
+;     je .found_rtl8139
 
-    mov [usb_devices], ah
+;     cmp byte [net_card_found], 1
+;     jne .skip_net
 
-    mov [usb_keybuffer], ebx
+;     call load_network_stack
+; .skip_net:
+;     ret
+; ;######################################################################################
+; ;################################ OHCI CONTROLLER #####################################
+; ;######################################################################################
+; .found_ohci:
+;     mov byte [ohci_found], 0
+;     mov esi, file_ohci_sys
+;     mov edi, OHCI_DRIVER_ADDR
+;     mov edx, DIR_DRIVERS_ADDR
+;     mov ah, 0x0a
+;     mov bl, [drive_number]
+;     int 0x33
 
-    mov [usb_keyboard_tdptr], edi
-    mov [usb_keyboard_edptr], esi
+;     mov eax, [ohci_base]
+;     call dword OHCI_DRIVER_ADDR
+;     cmp ah, 0
+;     je .loop
 
-    ;get USB devices
-    mov esi, USB_DEVICE_LIST
-    movzx edx, ah
-.loop_usb:
-    lodsb
-    cmp al, 1
-    je .keyboard
-    cmp al, 3
-    je .usb_stick
+;     mov [usb_devices], ah
 
-    cmp al, 0xee
-    je .loop
-    add esi, USB_LIST_ENTRY-1
+;     mov [usb_keybuffer], ebx
 
-    dec dx
-    jnz .loop_usb
+;     mov [usb_keyboard_tdptr], edi
+;     mov [usb_keyboard_edptr], esi
 
-    mov byte [ohci_found], 0
-    jmp .loop
+;     ;get USB devices
+;     mov esi, USB_DEVICE_LIST
+;     movzx edx, ah
+; .loop_usb:
+;     lodsb
+;     cmp al, 1
+;     je .keyboard
+;     cmp al, 3
+;     je .usb_stick
 
-.keyboard:
-    mov byte [usb_keyboard_used], 1
-    add esi, USB_LIST_ENTRY-1
-    dec dx
-    jnz .loop_usb
+;     cmp al, 0xee
+;     je .loop
+;     add esi, USB_LIST_ENTRY-1
 
-    mov byte [ohci_found], 0
-    jmp .loop
-.usb_stick:
-    movzx edi, byte [avail_disks]
-    imul edi, DRIVE_LIST_ENTRY
-    add edi, DRIVE_LIST_ADDR
+;     dec dx
+;     jnz .loop_usb
 
-    ;copy vendor name
-    push esi
-    push edi
-    mov ecx, 8
-    rep movsb
-    pop edi
-    pop esi
+;     mov byte [ohci_found], 0
+;     jmp .loop
 
-    mov byte [edi+8], 0x10      ;OHCI
-    mov byte [edi+9], 0xbe      ;USB
+; .keyboard:
+;     mov byte [usb_keyboard_used], 1
+;     add esi, USB_LIST_ENTRY-1
+;     dec dx
+;     jnz .loop_usb
 
-    mov eax, [ohci_base]
-    mov [edi+12], eax
+;     mov byte [ohci_found], 0
+;     jmp .loop
+; .usb_stick:
+;     movzx edi, byte [avail_disks]
+;     imul edi, DRIVE_LIST_ENTRY
+;     add edi, DRIVE_LIST_ADDR
 
-    mov ax, [esi+32]
-    mov [edi+10], ax
+;     ;copy vendor name
+;     push esi
+;     push edi
+;     mov ecx, 8
+;     rep movsb
+;     pop edi
+;     pop esi
 
-    mov eax, [esi+24]           ;max LBA
-    mov [edi+32], eax
-    mov eax, [esi+28]           ;block size
-    mov [edi+36], eax
+;     mov byte [edi+8], 0x10      ;OHCI
+;     mov byte [edi+9], 0xbe      ;USB
 
-    push esi
-    add edi, 16
-    add esi, 8
-    mov ecx, 16
-    rep movsb
-    pop esi
+;     mov eax, [ohci_base]
+;     mov [edi+12], eax
 
-    inc byte [avail_disks]
-    add esi, USB_LIST_ENTRY-1
-    dec dx
-    jnz .loop_usb
+;     mov ax, [esi+32]
+;     mov [edi+10], ax
 
-    mov byte [ohci_found], 0
-    jmp .loop
+;     mov eax, [esi+24]           ;max LBA
+;     mov [edi+32], eax
+;     mov eax, [esi+28]           ;block size
+;     mov [edi+36], eax
+
+;     push esi
+;     add edi, 16
+;     add esi, 8
+;     mov ecx, 16
+;     rep movsb
+;     pop esi
+
+;     inc byte [avail_disks]
+;     add esi, USB_LIST_ENTRY-1
+;     dec dx
+;     jnz .loop_usb
+
+;     mov byte [ohci_found], 0
+;     jmp .loop
+; ;######################################################################################
+; ;############################## INTEL HD AUDIO ########################################
+; ;######################################################################################
+; .found_intel_audiodev:
+;     mov esi, file_intl_aud_sys
+;     call load_driver_file
+;     jc .skip_intel_audiodev
+
+;     mov eax, [intel_audiodev_base]
+;     call edi
+; .skip_intel_audiodev:
+;     mov byte [intel_hd_audio], 0
+;     jmp .loop
+
+; ;######################################################################################
+; ;############################# RTL8139 ################################################
+; ;######################################################################################
+; .found_rtl8139:
+;     mov esi, file_rtl8139_sys
+;     call load_driver_file
+;     jc .skip_rtl8139
+
+;     mov eax, [rtl8139_base]
+;     call edi
+
+;     push edx
+;     mov eax, [edx+4]
+;     movzx ebx, byte [rtl8139_irq]
+;     call set_irq
+;     pop edx
+
+;     mov eax, [edx]
+;     mov [ip_packet], eax
+;     mov eax, edx
+;     add eax, 38
+;     mov [ip_packet+4], eax
+;     mov eax, [edx+42]
+;     mov [ip_packet+14], eax
+
+;     mov edi, ip_packet+8
+;     mov esi, edx
+;     add esi, 32
+;     mov ecx, 6
+;     rep movsb
+
+;     ; mov edi, [edx+12]
+;     ; mov [packet_stats], edi
+;     ; mov edi, [edx+16]
+;     ; mov [packet_stats+4], edi
+;     ; mov edi, [edx+20]
+;     ; mov [packet_stats+8], edi
+;     ; mov edi, [edx+24]
+;     ; mov [packet_stats+12], edi
+
+
+;     mov byte [net_card_found], 1
+; .skip_rtl8139:
+;     mov byte [rtl8139_found], 0
+;     jmp .loop
+
+; ;#################### END OF DRIVER INITIALIZATION ####################################
+; ;######################################################################################
+; ; Error loading drivers directory
+; .drivers_dir_err:
+;     call print_newline
+;     mov esi, .error_load_drivers
+;     mov ebx, COLOR_RED
+;     call print_string
+;     call print_newline
+;     ret
+; .error_load_drivers: db 'Error loading Drivers directory (either not found or disk error), ', 0x0a, 
+;                      db 'Keyboard, and other devices might not work. Restart the PC. If this keeps continuing,', 0x0a, 
+;                      db 'the directory is missing or the filesystem could be damaged', 0
 
 ;######################################################################################
 ;############################# SOUND BLASTER 16 #######################################
@@ -1551,81 +1190,6 @@ load_drivers:
     mov [wavfile_functions], edx
 .done:
     ret
-;######################################################################################
-;############################## INTEL HD AUDIO ########################################
-;######################################################################################
-.found_intel_audiodev:
-    mov esi, file_intl_aud_sys
-    call load_driver_file
-    jc .skip_intel_audiodev
-
-    mov eax, [intel_audiodev_base]
-    call edi
-.skip_intel_audiodev:
-    mov byte [intel_hd_audio], 0
-    jmp .loop
-
-;######################################################################################
-;############################# RTL8139 ################################################
-;######################################################################################
-.found_rtl8139:
-    mov esi, file_rtl8139_sys
-    call load_driver_file
-    jc .skip_rtl8139
-
-    mov eax, [rtl8139_base]
-    call edi
-
-    push edx
-    mov eax, [edx+4]
-    movzx ebx, byte [rtl8139_irq]
-    call set_irq
-    pop edx
-
-    mov eax, [edx]
-    mov [ip_packet], eax
-    mov eax, edx
-    add eax, 38
-    mov [ip_packet+4], eax
-    mov eax, [edx+42]
-    mov [ip_packet+14], eax
-
-    mov edi, ip_packet+8
-    mov esi, edx
-    add esi, 32
-    mov ecx, 6
-    rep movsb
-
-    ; mov edi, [edx+12]
-    ; mov [packet_stats], edi
-    ; mov edi, [edx+16]
-    ; mov [packet_stats+4], edi
-    ; mov edi, [edx+20]
-    ; mov [packet_stats+8], edi
-    ; mov edi, [edx+24]
-    ; mov [packet_stats+12], edi
-
-
-    mov byte [net_card_found], 1
-.skip_rtl8139:
-    mov byte [rtl8139_found], 0
-    jmp .loop
-
-;#################### END OF DRIVER INITIALIZATION ####################################
-;######################################################################################
-; Error loading drivers directory
-.drivers_dir_err:
-    call print_newline
-    mov esi, .error_load_drivers
-    mov ebx, COLOR_RED
-    call print_string
-    call print_newline
-    ret
-.error_load_drivers: db 'Error loading Drivers directory (either not found or disk error), ', 0x0a, 
-                     db 'Keyboard, and other devices might not work. Restart the PC. If this keeps continuing,', 0x0a, 
-                     db 'the directory is missing or the filesystem could be damaged', 0
-.test_file: db 'TEST    WAV'
-
 .check_sb16_card:
     mov dx, 0x226
     mov al, 1
@@ -1854,10 +1418,6 @@ load_network_stack:
     mov byte [net_active], 0
     mov byte [net_stack_loaded], 1
 
-    mov esi, [.heap]
-    mov ecx, 0x1000
-    mov ah, 0x0b
-    int 0x35
     popa
     clc
     ret
@@ -1883,6 +1443,7 @@ load_network_stack:
     ret
 .error_msg: db 'Error loading network files. Network unavailable', 0x0a, 0
 
+%include "kernel/pci.asm"
 %include "data/data.asm"
 %include "kernel/stdfunc.asm"
 %include "syscalls/output.asm"
@@ -1890,7 +1451,6 @@ load_network_stack:
 %include "syscalls/idt.asm"
 %include "shell/shell.asm"
 %include "drivers/fs16.asm"
-%include "drivers/pci.asm"
 %include "syscalls/string.asm"
 %include "syscalls/system.asm"
 font8x16:
@@ -1906,6 +1466,8 @@ rtl8139_irq: db 0
 net_card_found: db 0
 net_stack_loaded: db 0
 ps2_mouse_active: db 0
+drvrlist_addr: dd 0
+drvrlist_filesize: dd 0
 PIT_DIVISOR     equ 0x2e9c          ;10ms
 RTC_DIVISOR     equ 0x06            ;interrupt every 0,976ms
 ;memory map

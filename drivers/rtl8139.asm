@@ -150,6 +150,8 @@ init:
     mov [edx+20], edi
     mov edi, receive_success_count
     mov [edx+24], edi
+
+    xor ah, ah  ;error code = 0
     ret
 
 

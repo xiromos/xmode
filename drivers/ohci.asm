@@ -30,7 +30,7 @@ get_ohci_devices:
     push ecx
     push eax
     xor eax, eax
-    mov ecx, 0x1000
+    mov ecx, 256/4
     rep stosd
     pop eax
     pop ecx

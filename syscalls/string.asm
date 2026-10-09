@@ -112,6 +112,74 @@ string_to_hex6:
     pop eax
     ret
 
+string_to_hex:
+;   Input:
+;   ESI = pointer to hex string
+;   ECX = length of string (max 8 byte)
+;   Output:
+;   ESI contains hex number
+    push eax
+    push ebx
+    push ecx
+    push edx
+
+    cmp ecx, 0
+    je .error
+
+    cmp ecx, 8
+    ja .error
+
+    xor ebx, ebx
+.loop:
+    lodsb
+
+    cmp al, 0
+    je .done_convert
+
+    cmp al, '0'
+    jb .loop
+    cmp al, '9'
+    jbe .number
+
+    cmp al, 'A'
+    jb .loop
+    cmp al, 'F'
+    jbe .string
+
+    dec ecx
+    jnz .loop
+    jmp .done_convert
+
+.number:
+    sub al, '0'
+    jmp .add
+.string:
+    sub al, 0x41 - 10
+.add:
+    shl ebx, 4
+    movzx edx, al
+    or ebx, edx
+    dec ecx
+    jnz .loop
+
+.done_convert:
+    mov esi, ebx
+
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    clc
+    ret
+
+.error:
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    stc
+    ret
+
 
 bcd_convert_byte:
     ;AL = hex number

@@ -65,8 +65,19 @@ Currently there is only one function available and its maybe going to be moved t
 - wait for keypress
 - output: 
     - AL: ASCII character of pressed key or scancode
-    - AH: scancode (PS/2 Scancode set 1 or USB Scancodes)
-    - EDX: pointer to 8 bytes with all pressed scancodes (USB Keyboards only)
+    - AH: global scancode (scancodes for all keys you can see in data/data.asm under header 'KEY CODES')
+    - EDX: pointer to 7 Byte structure with control keys + normal keys:
+      BYTE 1: control / modifier keys
+          bit0: left CTRL
+          bit1: left SHIFT
+          bit2: left ALT
+          bit3: left WIN
+          bit4: right CTRL
+          bit5: right SHIFT
+          bit6: right ALT
+          bit7: right WIN
+      BYTE 2: key 1
+      BYTE 3-7: key 2-6
 
 
 

@@ -7,30 +7,18 @@ start:
     xor esi, esi
     xor ebx, ebx            ;text color (black)
     mov ecx, 0x00ffffff     ;background color (white)
-    mov ah, 0x0a
-    int 0x34
-
-    mov [window_packet], edi
-    mov [win_id], ax
+    call init_window
 
     mov esi, welcome_msg
-    mov edi, [window_packet]
-    mov bx, [win_id]
-    mov ah, 0x1a
-    int 0x30
+    xor ebx, ebx
+    call print_string
 
 .loop:
-    mov ah, 0x1b
-    mov al, '>'
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    mov ax, '>'
+    call print_char
 
-    mov ah, 0x1b
-    mov al, 0x20
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    mov ax, ' '
+    call print_char
 
     xor ecx, ecx
     mov edi, command_buffer
@@ -47,41 +35,27 @@ start:
     jae .get_input
     inc ecx
 
-    push edi
-    mov ah, 0x1b
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
-    pop edi
+    call print_char
     
     stosb
 
-    cmp al, 'q'
-    je .quit
     jmp .get_input
 
 .handle_backspace:
     cmp ecx, 0
     jbe .get_input
-    mov ah, 0x1b
-    mov bx, [win_id]
-    mov al, 0x08
-    push edi
-    mov edi, [window_packet]
-    int 0x30
 
-    mov ah, 0x1b
-    mov al, 0x20
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    mov ax, 0x08
+    xor ebx, ebx
+    call print_char
 
-    mov ah, 0x1b
-    mov al, 0x08
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
-    pop edi
+    mov ax, 0x20
+    xor ebx, ebx
+    call print_char
+
+    mov ax, 0x08
+    xor ebx, ebx
+    call print_char
 
     dec edi
     dec ecx
@@ -89,11 +63,7 @@ start:
 
 .done:
     mov byte [edi], 0
-    mov ah, 0x1b
-    mov al, 0x0a
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    call print_newline
 
     mov edi, command_buffer
     mov esi, clear_str
@@ -110,49 +80,33 @@ start:
     call cmp_cmd
     jc .novyi
 
-    mov esi, no_cmd
-    mov ah, 0x1a
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    mov edi, command_buffer
+    mov esi, quit_str
+    call cmp_cmd
+    jc .quit
 
-    mov ah, 0x1b
-    mov al, 0x0a
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    mov esi, no_cmd
+    xor ebx, ebx
+    call print_string
+
+    call print_newline
 
     jmp .loop
 
 .clear_screen:
-    mov ah, 0x1e
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    call clear_window
 
     jmp .loop
 .help:
-    mov ah, 0x1a
-    mov bx, [win_id]
     mov esi, help_msg
-    mov edi, [window_packet]
-    int 0x30
+    xor ebx, ebx
+    call print_string
 
-    mov ah, 0x1b
-    mov al, 0x0a
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x30
+    call print_newline
     jmp .loop
 .quit:
-    mov ah, 0x0b
-    mov bx, [win_id]
-    mov edi, [window_packet]
-    int 0x34
-    
-    mov ah, 0x05        ;exit syscall
-    int 0x35
-
+    call end_program
+    jmp .loop
 .novyi:
     mov ah, 0x02
     mov esi, wmtest
@@ -165,10 +119,8 @@ start:
 
 .error:
     mov esi, error_msg
-    mov edi, [window_packet]
-    mov bx, [win_id]
-    mov ah, 0x1a
-    int 0x30
+    xor ebx, ebx
+    call print_string
     jmp .loop
 
 cmp_cmd:
@@ -190,22 +142,18 @@ cmp_cmd:
     clc
     ret
 
-    mov ah, 0x05
-    int 0x35
-
-
+%include "includes/stdfunc.inc"
 section .data
-window_packet: dd 0
-win_id: dw 0
-
 clear_str: db 'clear', 0
 help_str: db 'help', 0
 spawn_str: db 'spawn', 0
+quit_str: db 'quit', 0
 no_cmd: db 'Not a known command', 0
 
 help_msg: db 'Help', 0x0a,
           db 'HELP: show this message', 0x0a,
           db 'CLEAR: clear screen', 0x0a,
+          db 'QUIT: quit program', 0x0a,
           db 'Press "q" to quit program', 0
 
 welcome_msg: db 'Mini-Shell: Type "help" for list of commands', 0x0a, 0

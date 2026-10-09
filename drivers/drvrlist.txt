@@ -1,4 +1,25 @@
-%10ec $8139 /DRIVERS/RTL8139.SYS
-%8086 $2668 /DRIVERS/INTL_AUD.SYS
-%8086 $27D8 /DRIVERS/INTL_AUD.SYS
-%1002 $4383 /DRIVERS/INTL_AUD.SYS
+# %Vendor ID $Device ID *FILENAME.SYS
+# Use capital letters
+
+\NET
+# Put here network drivers
+%10EC $8139 *RTL8139.SYS
+
+\SOUND
+# Put here sound drivers
+%8086 $2668 *INTL_AUD.SYS
+%8086 $27D8 *INTL_AUD.SYS
+%1002 $4383 *INTL_AUD.SYS
+
+\GRAPHIC
+# Put here graphic drivers
+
+\USB
+# Put here USB driver
+%FFFF $0x0002 *UHCI.SYS
+%FFFF $0x0003 *EHIC.SYS
+%FFFF $0x0004 *XHCI.SYS
+
+# See driver interface at /docs/drivers.md
+# End of file marker:
+~

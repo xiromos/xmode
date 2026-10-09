@@ -145,11 +145,6 @@ exec_cmd:
     jc change_drive
 
     mov edi, command_buffer
-    mov esi, osdev_discord_str
-    call cmp_str
-    jc .osdev_dc
-
-    mov edi, command_buffer
     mov esi, usb_str
     call cmp_str
     jc show_usb_devices
@@ -231,12 +226,6 @@ exec_cmd:
 .dhcp: db 0
 .dhcp_error_str: db 'Error: DHCP Request already sent', 0x0a, 0
 .no_net_str: db 'Error: No network connection', 0x0a, 0
-.osdev_dc:
-    mov esi, osdev_discord_msg
-    mov ebx, 0x00ffffff
-    call print_string
-    call print_newline
-    ret
 .set_bgcolor:
     mov esi, [argument]
     call string_uppercase
@@ -504,7 +493,7 @@ exec_cmd:
     call print_newline
     ret
 
-.program_error_str: db 'Something went wrong while loading program (Filesystem error)', 0x0a, 0
+.program_error_str: db 'Something went wrong while loading program (Filesystem error or maximum tasks reached)', 0x0a, 0
 .program_coff_error_str: db 'Error while relocating COFF file, are you sure this is a COFF Objekt file?', 0x0a, 0
 .exec_prog_err:
     ret

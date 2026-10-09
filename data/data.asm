@@ -186,7 +186,6 @@ taskkill_str: db 'TASKKILL', 0
 ahci_str: db 'AHCI', 0
 lsdisk_str: db 'LSDISK', 0
 cdisk_str: db 'CDISK', 0
-osdev_discord_str: db 'OSDEVDISCORD', 0
 usb_str: db 'USB', 0
 bgcolor_str: db 'BGCOLOR', 0
 cd_str: db 'CD', 0
@@ -506,6 +505,20 @@ KEY_F10         equ 0x37
 KEY_F11         equ 0x38
 KEY_F12         equ 0x39
 
+KEY_MINUS       equ 0x3a
+KEY_EQUAL       equ 0x3b
+KEY_LBRACKET    equ 0x3C
+KEY_RBRACKET    equ 0x3D
+KEY_BACKSLASH   equ 0x3E
+KEY_SEMICOLON   equ 0x3F    ;;
+KEY_APOSTROPHE  equ 0x40    ;'
+KEY_GRAVE       equ 0x41    ;`
+KEY_COMMA       equ 0x42    ;,
+KEY_DOT         equ 0x43    ;.
+KEY_SLASH       equ 0x44
+KEY_LESS        equ 0x45    ;< / >
+
+global_key_buffers: dd 0x1b1000
 ;###################################################################
 
 ohci_read_sectors: dd 0
@@ -535,8 +548,6 @@ subdir_entries: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
-program_addr    equ 0x1000000
-program_addr_off equ 0x20000
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
 read_buffer equ 0x160000    ;times 13 db 0
@@ -590,10 +601,10 @@ dot_dot_entry db        "..         "
 idle_task_str db        "IDLE    SYS"
 file_ps2mouse_sys db    "PS2MOUSESYS"
 file_mouse_bmp db       "MOUSE   BMP"
+file_drvrlist_txt db    "DRVRLISTTXT"
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
-osdev_discord_msg: db 'Thanks to the OSDev Discord Server for muting me saying my opinion', 0
 ;windows and multitasking
 windows_list:
     times 10 db 0
@@ -613,15 +624,15 @@ win_rows: dd 0
 cust_height: dd 0
 win_buffer_addr: dd 0
 
-win_packet_list_size: dd 8*10
+max_window_packets: dd 4096 / 32
 win_packet_base: dd 0x1b0000
+WIN_PACKET_SIZE     equ 32
 ; maximal number of windows = num_windows
-    times 8*10 dd 0
     ; One Window Packet:
     ; dd 0            ;foreground color
     ; dd 0x00ffffff   ;background color
-    ; dd 300          ;width
-    ; dd 200          ;height
+    ; dd 300          ;width        ;0 = empty window packet, can be used
+    ; dd 200          ;height       ;0 = empty window packet, can be used
     ; dd 300          ;CurX
     ; dd 200          ;CurY
     ; dd 300          ;original CurX
@@ -674,6 +685,7 @@ switch_tasks_win_id: dw 0
 switch_tasks_msg: db 'Available Tasks: ', 0
 task_not_found: db 'Task not found', 0
 task_list_header: db 'PID   Name', 0
+idle_task_stack: dd 0x162800
 
 SYMBOL_TABLE_ADDR           equ 0xef0000
 RELOCATION_TABLE_CONTENTS   equ 0xeffe00
@@ -742,4 +754,15 @@ max_counters: dd 0x1000/8
 ;     dd max_value                ;value_from_program+system_tick, if this value is equal with the value from [pointer_to_variable]+system_tick then this timer gets deleted
 
 system_tick: dd 0         ;global tick value
-    
+
+; List of structures from 0x100000 - 0x1fffff
+; 0x100000: AHCI Structures
+; 0x160000: shell buffer1
+; 0x161000: shell buffer2
+; 0x162000: shell buffer3
+; 0x162500: OHCI HCCA
+; 0x162800: stack of idle task (grows downwards)
+; 0x163000: USB Device List
+; 0x1a0000: program stacks
+; 0x1b0000: window buffers
+; 0x1b1000: key buffers
