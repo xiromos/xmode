@@ -78,6 +78,7 @@ print_char:
     push edi
     push ebx
 
+    mov dx, ax
     mov ah, 0x1b
     mov edi, [window_packet]
     mov bx, [win_id]

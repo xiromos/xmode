@@ -53,8 +53,8 @@ chmod +x buildx.sh
 ## Required packages to build
 ```bash
 # Arch Linux
-sudo pacman -Syu nasm qemu-full mtools
+sudo pacman -S nasm qemu-full mtools edk2-ovmf
 
 # Linux Mint / Ubuntu
-sudo apt install nasm qemu mtools
+sudo apt install nasm qemu mtools ovmf
 ```

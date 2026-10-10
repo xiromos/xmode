@@ -664,7 +664,27 @@ load_configs:
     mov bl, [drive_number]
     mov ah, 0x0a
     int 0x33
-    jc .error
+
+    mov esi, cfg_load_err
+    jc rsod
+
+    mov ah, 0x0a
+    mov ecx, 0x8000
+    int 0x35
+
+    push esi
+    mov ah, 0x0a
+    mov edx, CONFIG_DIR_BUFFER
+    mov edi, esi
+    mov esi, file_default_fnt
+    mov bl, [drive_number]
+    int 0x33
+    
+    mov esi, cfg_load_err
+    jc rsod
+
+    pop esi
+    mov [font8x16], esi
 
     xor ah, ah
     mov edi, CONFIG_DIR_BUFFER
@@ -1453,8 +1473,8 @@ load_network_stack:
 %include "drivers/fs16.asm"
 %include "syscalls/string.asm"
 %include "syscalls/system.asm"
-font8x16:
-    incbin "data/DEFAULT.FNT"
+font8x16: dd 0
+    ;incbin "data/DEFAULT.FNT"
     ;incbin "build/font_ru_RU.fnt"
 disk_error_msg: db 'Disk Read Error', 0
 usb_devices: db 0

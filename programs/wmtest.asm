@@ -31,10 +31,11 @@ start:
     cmp al, 0x0d
     je .done
 
-    cmp ecx, 200
+    cmp ecx, 100
     jae .get_input
     inc ecx
 
+    xor ah, ah
     call print_char
     
     stosb
@@ -157,7 +158,7 @@ help_msg: db 'Help', 0x0a,
           db 'Press "q" to quit program', 0
 
 welcome_msg: db 'Mini-Shell: Type "help" for list of commands', 0x0a, 0
-command_buffer: db 200 dup(0)
+command_buffer: db 100 dup(0)
 
 wmtest: db 'WMTEST  OBJ', 0
 error_msg: db 'Error loading new program', 0x0a, 0

@@ -66,7 +66,7 @@ draw_char:
     ; font index
     movzx esi, al
     imul esi, 16
-    add esi, font8x16
+    add esi, dword [font8x16]
 
     mov eax, [cur_y]
     imul eax, [pitch]        ; y * pitch

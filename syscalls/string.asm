@@ -203,3 +203,136 @@ bcd_convert_byte:
     pop ecx
     pop ebx
     ret
+
+utf8_convert_word:
+    ;converts a single UTF-8 word into a Unicode character
+    ;AX = UTF-8 code
+    ;Output: AX = Unicode character
+
+    push ecx
+    test al, 0x80
+    jz .done    ;its an ASCII char
+
+    movzx cx, ah
+    xor ah, ah
+    
+    ;remove UTF-8 masks
+    and ax, 0x1f
+    and cx, 0x3f
+
+    ;connect bits
+    shl ax, 6
+    or ax, cx
+.done:
+    pop ecx
+    ret
+
+utf8_string_char:
+    ;ESI = *string
+    ;loads the UTF-8 code of the first char in ESI
+    ;increases ESI
+    ;converts the UTF-8 code to Unicode and outputs it in AX
+    ;if Unicode is: > 0x800, then it outputs AX = 1
+    ;if the char at *ESI is 0, AX = 0
+
+    mov al, [esi]
+    cmp al, 0
+    je .null
+
+    test al, 0x80
+    jz .ascii
+
+    push ecx
+    push ebx
+
+    mov cl, al
+    and cl, 0xe0
+    cmp cl, 0xc0
+    je .bytes2
+
+    mov cl, al
+    and cl, 0xf0
+    cmp cl, 0xe0
+    je .bytes3
+
+    mov cl, al
+    and cl, 0xf8
+    cmp cl, 0xf0
+    je .bytes4
+
+    jmp .error
+
+.null:
+    inc esi
+    xor ax, ax
+    ret
+.ascii:
+    inc esi
+    xor ah, ah
+    ret
+
+.bytes2:
+    mov bl, [esi+1]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    add esi, 2
+    mov ah, bl
+    
+    ;call utf8_convert_word
+    pop ebx
+    pop ecx
+    ret
+
+.bytes3:
+    mov bl, [esi+1]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    mov bl, [esi+2]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    add esi, 3
+    mov ax, 1
+    pop ebx
+    pop ecx
+    ret
+.bytes4:
+    mov bl, [esi+1]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    mov bl, [esi+2]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    mov bl, [esi+3]
+    mov cl, bl
+    and cl, 0xc0
+    cmp cl, 0x80
+    jne .error
+
+    add esi, 4
+    mov ax, 1
+    pop ebx
+    pop ecx
+    ret
+
+.error:
+    pop ebx
+    pop ecx
+
+    inc esi
+    mov ax, 1
+    ret

@@ -197,6 +197,7 @@ setbgcolor_helpmsg: db 'Set Background Color.', 0x0a,
                     db 'Usage: ', 0
 setbgcolor_helpmsg2: db 'bgcolor #abcdef', 0
 configs_load_err: db '> Error while applying config files. Loaded standard configs', 0
+cfg_load_err: db 'Couldnt load Font from Config Directory', 0
 ;disk
 fs_loading_str: db '> Loading FAT16...', 0
 disk_lba:           ;extended read/write needs a structure which points to the LBA
@@ -602,6 +603,7 @@ idle_task_str db        "IDLE    SYS"
 file_ps2mouse_sys db    "PS2MOUSESYS"
 file_mouse_bmp db       "MOUSE   BMP"
 file_drvrlist_txt db    "DRVRLISTTXT"
+file_default_fnt db     "DEFAULT FNT"
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
