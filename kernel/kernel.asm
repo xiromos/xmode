@@ -664,8 +664,6 @@ load_configs:
     mov bl, [drive_number]
     mov ah, 0x0a
     int 0x33
-
-    mov esi, cfg_load_err
     jc rsod
 
     mov ah, 0x0a
@@ -679,12 +677,16 @@ load_configs:
     mov esi, file_default_fnt
     mov bl, [drive_number]
     int 0x33
-    
-    mov esi, cfg_load_err
     jc rsod
 
     pop esi
     mov [font8x16], esi
+
+    mov eax, esi
+    mov ebx, 0x8000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_USER
+    call map_region
 
     xor ah, ah
     mov edi, CONFIG_DIR_BUFFER
@@ -716,22 +718,21 @@ load_configs:
     int 0x33
     jc .error
 
-    mov ecx, 0xfffff
-.delay:
-    loop .delay
-
     mov esi, CONFIGS_FILE_BUFFER
+    mov edi, .loop
 .loop:
     lodsb
     cmp al, '#'
     je .skip_comment
     cmp al, 0x20
     je .loop
+    cmp al, 0x0a
+    je .loop
     cmp al, 0
     je .error
 
     sub esi, 1
-.convert:
+    push esi
     call string_to_hex6
     mov [bgcolor], esi
 
@@ -748,15 +749,37 @@ load_configs:
     mov dword [edi], esi
     loop .loop1
 
+    ;get color for window border
+    mov edi, .loop_winb
+    pop esi
+    add esi, 6
+
+.loop_winb:
+    lodsb
+    cmp al, '#'
+    je .skip_comment
+    cmp al, 0x20
+    je .loop
+    cmp al, 0x0a
+    je .loop
+    cmp al, 0
+    je .done
+
+    sub esi, 1
+    call string_to_hex6
+    mov [win_border_color], esi
 .done:
     ret
 .skip_comment:
     lodsb
     cmp al, 0x0a
     jne .skip_comment
-    jmp .convert
+    cmp al, 0
+    je .done
+    jmp edi
+
 .error:
-    mov [bgcolor], dword 0x0014C4BE
+    mov dword [bgcolor], 0x0014C4BE
     mov esi, configs_load_err
     mov ebx, COLOR_RED
     call print_string
