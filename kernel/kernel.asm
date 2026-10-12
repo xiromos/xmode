@@ -7,7 +7,7 @@ start:
     mov es, ax
     mov ds, ax
 
-
+    mov [drive_number], dl
     mov eax, [0x7c00+28]
     mov [hidden_sectors], eax
 
@@ -33,7 +33,7 @@ start:
     mov [bpp], al               ;should be 3
 
     ;get memory map
-    mov ax, 0x7000
+    mov ax, 0x7500
     mov es, ax
     xor di, di
     xor eax, eax
@@ -56,6 +56,8 @@ start:
 .done:
     mov [main.memmap_entrysize], cx
     mov [main.memmap_entries], si
+
+    call bios_load_drivers
 
     mov ax, tss
     shr ax, 16
@@ -192,7 +194,7 @@ main:
     push edi
 
     imul ecx, edx
-    mov esi, 0x70000
+    mov esi, 0x75000
     rep movsb
 
     pop edi
@@ -310,6 +312,51 @@ main:
     mov ebx, 0x00ffffff
     call print_string
 
+    ; INIT FIRST TASK (SLOT 0)
+    mov edi, tasks_esp
+    cli
+    ; init idle task
+    push edi
+    mov esi, idle_task_str
+    mov ecx, 11
+    rep movsb
+    pop edi
+
+    mov dword [edi+19], 0xfffffffe
+
+    mov ebp, esp
+    mov esi, [idle_task_stack]
+    mov esp, esi
+
+    push ss
+    push esp
+    push dword 0x202
+    push cs
+    push dword idle_task
+
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+
+    mov dword [edi+15], esp
+
+    mov esp, ebp
+    sti
+
+    inc word [task_count]
+    mov edi, tasks_esp
+    add edi, TASK_SIZE      ;task 1 - shell
+    mov esi, shell_task_str
+    mov ecx, 11
+    rep movsb
+
+    mov ebx, init_system  
+    mov esi, program_init_sys
+    mov ah, 0x13
+    int 0x35
+
     call scan_disk_pci
     call search_boot_device
     call get_bpb_data
@@ -363,43 +410,10 @@ main:
     mov edx, [bm_base]
     call print_hex8
 
-    ; INIT FIRST TASK (SLOT 0)
-    mov edi, tasks_esp
-    cli
-    ; init idle task
-    push edi
-    mov esi, idle_task_str
-    mov ecx, 11
-    rep movsb
-    pop edi
-
-    mov dword [edi+19], 0xfffffffe
-
-    mov ebp, esp
-    mov esi, [idle_task_stack]
-    mov esp, esi
-
-    push ss
-    push esp
-    push dword 0x202
-    push cs
-    push dword idle_task
-
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
-
-    mov dword [edi+15], esp
-
-    mov esp, ebp
-    sti
-
-    mov ebx, init_system
-    mov esi, program_init_sys
-    mov ah, 0x13
-    int 0x35
+    ; mov ebx, init_system  
+    ; mov esi, program_init_sys
+    ; mov ah, 0x13
+    ; int 0x35
     
     mov al, 0x20
     call print_char
@@ -414,17 +428,11 @@ main:
     call print_hex8
     call print_newline
 
-    ;test write with DMA
-    mov edi, 0x8000
-    mov ebx, 4
-    mov ecx, 100
-    mov ah, 0x13
-    ;int 0x32
-
-    ;call load_drivers
-
     call load_configs
     jc .config_err
+
+    mov byte [boot_done], 1
+    int 0x20
 
     mov ebx, 0x00FFFFFF
     mov esi, gdt_loaded_msg
@@ -470,7 +478,7 @@ main:
     mov ah, 0x01
     int 0x30
     call print_newline
-    inc word [task_count]
+    ;inc word [task_count]
     jmp .init_first_task
 
 .config_err:
@@ -479,11 +487,12 @@ main:
     call print_string
     call print_newline
 .init_first_task:
-    mov edi, tasks_esp
-    add edi, TASK_SIZE      ;task 1 - shell
-    mov esi, shell_task_str
-    mov ecx, 11
-    rep movsb
+    ; mov edi, tasks_esp
+    ; add edi, TASK_SIZE      ;task 1 - shell
+    ; mov esi, shell_task_str
+    ; mov ecx, 11
+    ; rep movsb
+
     ; write to disk
     ; mov ah, 0x03
     ; mov edi, 0x15000
@@ -642,16 +651,67 @@ load_fat:
     ret
 
 search_boot_device:
+    pusha
+    mov ah, 0x0a
+    mov ecx, 512
+    int 0x35
+
+    xor edx, edx
+.loop:
+    cmp dl, [avail_disks]
+    ja .error
+
+    push edx
+    mov dh, 0x0b
+    mov ax, 1
+    mov edi, esi
+    xor ecx, ecx
+    call read_drive
+    pop edx
+    jc .skip
+
+    push esi
+    push edi
+    mov esi, volume_label
+    add edi, 0x2b
+    mov ecx, 11
+    repe cmpsb
+    pop edi
+    pop esi
+    jne .skip
+
+    mov ecx, [volume_id]
+    cmp [edi+0x27], ecx
+    jne .skip
+
+    mov byte [boot_drive], dl
+    mov byte [drive_number], dl
+
+    mov ah, 0x0b
+    mov ecx, 512
+    int 0x35
+    popa
+    ret
+.skip:
+    inc dl
+    jmp .loop
+.error:
     mov byte [boot_drive], 2
     mov byte [drive_number], 2
+
+    mov ah, 0x0b
+    mov ecx, 512
+    int 0x35
+    popa
     ret
 
 init_system:
-    mov ecx, 0x1000000
-.loop:
-    dec ecx
-    jnz .loop
+    cmp byte [boot_done], 1
+    je .done
 
+    int 0x20
+    jmp init_system
+.done:
     mov ah, 0x05
     int 0x35
     ret
@@ -1486,6 +1546,335 @@ load_network_stack:
     ret
 .error_msg: db 'Error loading network files. Network unavailable', 0x0a, 0
 
+;######################################################################################
+;############################# LOAD BOOT DRIVER FILES #################################
+;######################################################################################
+
+bits 16
+bios_load_drivers:
+    xor ax, ax
+    mov es, ax
+
+    mov word [dap+2], 1
+    mov word [dap+4], 0x7c00
+
+    mov ah, 0x42
+    mov si, dap
+    mov dl, [drive_number]
+    int 0x13
+
+    mov cx, 8
+    mov si, .fat16_str
+    mov di, 0x7c00+0x36
+    repe cmpsb
+    jne .done
+
+    mov ax, [0x7c00+0x0b]
+    mov [.bytes_per_sec], ax
+    mov al, [0x7c00+0x0d]
+    mov [.sec_per_cluster], al
+    mov ax, [0x7c00+0x0e]
+    mov [.reserved_sectors], ax
+    mov al, [0x7c00+0x10]
+    mov [.fat_num], al
+    mov ax, [0x7c00+0x11]
+    mov [.root_entries], ax
+    mov ax, [0x7c00+0x16]
+    mov [.fat_size], ax
+    mov eax, [0x7c00+0x1c]
+    mov [.hidden_sectors], eax
+
+    mov ax, [.root_entries]
+    mov bx, 32
+    mul bx
+
+    mov bx, 512
+    add ax, bx
+    dec ax
+    xor dx, dx
+    div bx
+
+    mov [.root_sectors], ax
+
+    ;calculate root dir start
+    ;ReservedAreaCnt + (NumberOfFATs * FATSz16)
+
+    xor eax, eax
+    mov al, [.fat_num]
+    mov bx, [.fat_size]
+    mul bx
+    add ax, word [.reserved_sectors]
+    add eax, dword [.hidden_sectors]
+
+    mov word [dap+4], 0x500
+    mov bx, [.root_sectors]
+    mov [dap+2], bx
+    mov [dap+8], eax
+
+    add ax, [.root_sectors]
+    mov ebp, eax
+
+    mov ah, 0x42
+    mov si, dap
+    mov dl, [drive_number]
+    int 0x13
+
+    mov eax, [.hidden_sectors]
+    add ax, [.reserved_sectors]
+    mov [dap+8], eax
+    mov ax, [.fat_size]
+    mov [dap+2], ax
+    mov word [dap+4], 0x4000
+
+    mov ah, 0x42
+    mov si, dap
+    mov dl, [drive_number]
+    int 0x13
+
+    ;load drivers directory
+    mov eax, DIR_DRIVERS_ADDR
+    call .addr_to_seg_off
+    mov di, cx
+    mov si, .dir_drivers_str
+    mov ax, 0x500
+    xor dx, dx
+    call .load_file
+
+    ;load OHCI.SYS
+    mov edi, OHCI_ADDR
+    mov si, .file_ohci_sys
+    call .load_driver_file
+    jnc .uhci
+
+    mov eax, OHCI_ADDR
+    call .write_fail
+
+.uhci:
+    ;load UHCI.SYS
+    mov edi, UHCI_ADDR
+    mov si, .file_uhci_sys
+    call .load_driver_file
+    jnc .ehci
+
+    mov eax, UHCI_ADDR
+    call .write_fail
+
+.ehci:
+    ;load EHCI.SYS
+    mov edi, EHCI_ADDR
+    mov si, .file_ehci_sys
+    call .load_driver_file
+    jnc .xhci
+
+    mov eax, EHCI_ADDR
+    call .write_fail
+
+.xhci:
+    ;load XHCI.SYS
+    mov edi, XHCI_ADDR
+    mov si, .file_xhci_sys
+    call .load_driver_file
+    jnc .nvme
+
+    mov eax, XHCI_ADDR
+    call .write_fail
+
+.nvme: 
+    ;load NVME.SYS
+    mov edi, NVME_ADDR
+    mov si, .file_nvme_sys
+    call .load_driver_file
+    jnc .fdc
+
+    mov eax, NVME_ADDR
+    call .write_fail
+
+.fdc:
+    ;load FDC.SYS
+    mov edi, FDC_ADDR
+    mov si, .file_fdc_sys
+    call .load_driver_file
+    jnc .sdc
+
+    mov eax, FDC_ADDR
+    call .write_fail
+
+.sdc:
+    ;load SDC.SYS
+    mov edi, SDC_ADDR
+    mov si, .file_sdc_sys
+    call .load_driver_file
+    jnc .done
+
+    mov eax, SDC_ADDR
+    call .write_fail
+.done:
+    ret
+.fat16_str: db 'FAT16   '
+.load_driver_file:
+    ;EDI = address
+    ;SI = *file
+    mov eax, DIR_DRIVERS_ADDR
+    call .addr_to_seg_off
+    mov dx, bx
+    mov ax, cx
+
+    push ax
+    mov eax, edi
+    call .addr_to_seg_off
+    mov di, cx
+    pop ax
+    call .load_file
+    ret
+.write_fail:
+    ;EAX = addr
+    call .addr_to_seg_off
+    mov ax, bx
+    mov es, ax
+    mov di, cx
+    mov dword [es:di], 'FAIL'
+    ret
+
+.load_file:
+    ;SI = *filename
+    ;BX:DI = where to load
+    ;DX:AX = *directory
+    push di
+    mov di, ax
+    mov ax, dx
+    mov es, ax
+    mov dx, [.root_entries]
+.loop1:
+    mov cx, 11
+    push di
+    push si
+    rep cmpsb
+    pop si
+    pop di
+    je .found
+
+    add di, 32
+    dec dx
+    jnz .loop1
+
+    pop di
+    xor ax, ax
+    mov es, ax
+.error_load:
+    stc
+    ret
+.found:
+    pop si
+    mov [dap+4], si
+    mov [dap+6], bx
+    movzx ax, byte [.sec_per_cluster]
+    mov [dap+2], ax
+
+    mov dword [dap+8], 0
+
+    mov dx, [es:di+0x1a]
+    xor ax, ax
+    mov es, ax
+.loop:
+    mov ax, dx
+    call .cluster_to_sec
+
+    push dx
+    mov [dap+8], ax
+    mov ah, 0x42
+    mov si, dap
+    mov dl, [drive_number]
+    int 0x13
+    pop dx
+    jc .error_load
+
+    movzx ax, byte [.sec_per_cluster]
+    mov bx, [.bytes_per_sec]
+    mul bx
+
+    clc
+    mov cx, [dap+4]
+    add cx, ax
+    jc .segment
+    mov [dap+4], cx
+    jmp .cluster
+.segment:
+    mov [dap+4], cx
+    mov ax, [dap+6]
+    add ax, 0x1000
+    add [dap+6], ax
+.cluster:
+
+    mov si, 0x4000
+    mov ax, dx
+    shl ax, 1
+    add si, ax
+    mov ax, [si]
+    mov dx, ax
+
+    cmp ax, 0
+    je .error_load
+
+    cmp ax, 0xfff7
+    je .error_load
+
+    cmp ax, 0xfff8
+    jb .loop
+
+    clc
+    ret
+.cluster_to_sec:
+    push cx
+    sub ax, 2
+    movzx cx, byte [.sec_per_cluster]
+    mul cx
+    add ax, bp
+    pop cx
+    ret
+.addr_to_seg_off:
+    ;EAX = 32bit address
+    ;Output:
+    ;   BX = segment
+    ;   CX = offset
+    mov ecx, eax
+    and ecx, 0x0f
+    shr eax, 4
+    movzx ebx, ax
+    ret
+
+; ## data ##
+.dir_drivers_str:   db 'DRIVERS    '
+.file_ohci_sys:     db 'OHCI    SYS'
+.file_uhci_sys:     db 'UHCI    SYS'
+.file_ehci_sys:     db 'EHCI    SYS'
+.file_xhci_sys:     db 'XHCI    SYS'
+.file_nvme_sys:     db 'NVME    SYS'
+.file_fdc_sys:      db 'FDC     SYS'
+.file_sdc_sys:      db 'SDC     SYS'
+
+.sec_per_cluster: db 0
+.reserved_sectors: dw 0
+.fat_num: db 0
+.root_entries: dw 0
+.total_sectors: dw 0
+.fat_size: dw 0
+.hidden_sectors: dd 0
+.bytes_per_sec: dw 0
+
+.root_start: dd 0
+.root_sectors: dw 0
+.data_start: dd 0
+
+dap:
+    db 0x10
+    db 0
+    dw 0    ;number of sectors to read
+    dw 0    ;offset
+    dw 0    ;segment
+    dq 0    ;LBA
+drive_number: db 0
+
+bits 32
 %include "kernel/pci.asm"
 %include "data/data.asm"
 %include "kernel/stdfunc.asm"
@@ -1501,16 +1890,12 @@ font8x16: dd 0
     ;incbin "build/font_ru_RU.fnt"
 disk_error_msg: db 'Disk Read Error', 0
 usb_devices: db 0
-intel_hd_audio: db 0
-intel_audiodev_base: dd 0           ;MMIO Base Address
-rtl8139_found: db 0
-rtl8139_base: dd 0
-rtl8139_irq: db 0
 net_card_found: db 0
 net_stack_loaded: db 0
 ps2_mouse_active: db 0
 drvrlist_addr: dd 0
 drvrlist_filesize: dd 0
+boot_done: db 0
 PIT_DIVISOR     equ 0x2e9c          ;10ms
 RTC_DIVISOR     equ 0x06            ;interrupt every 0,976ms
 ;memory map

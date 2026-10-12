@@ -1,6 +1,14 @@
 
 
 scan_disk_pci:
+    cmp dword [FDC_ADDR], 'FAIL'
+    je .skip_fdc
+
+    mov edi, FDC_ADDR
+    call load_coff_obj
+    jc .skip_fdc
+    call edi
+.skip_fdc:
     mov byte [avail_disks], 2
     xor ebx, ebx
 .bus_loop:
@@ -51,6 +59,11 @@ scan_disk_pci:
     ;class
     mov edx, ebx
     shr edx, 24
+
+    cmp dl, 0x0c
+    je .serial_bus_controller
+    cmp dl, 0x08
+    je .base_system_peripheral
 
     cmp dl, 0x01
     je .ahci_ide
@@ -121,6 +134,276 @@ scan_disk_pci:
 
     mov byte [ahci_found], 1
     call ahci_init
+    jmp .next_device
+
+.serial_bus_controller:
+    mov edx, ebx
+    shr edx, 16
+    cmp dl, 0x03
+    je .usb
+
+    jmp .skip
+.usb:
+    mov edx, ebx
+    shr edx, 8
+    cmp dl, 0
+    je .uhci
+    cmp dl, 0x10
+    je .ohci
+    cmp dl, 0x20
+    je .ehci
+    jmp .next_device
+.base_system_peripheral:
+    mov edx, ebx
+    shr edx, 16
+    cmp dl, 0x05
+    je .sdcard
+    jmp .next_device
+
+;######################################################################################
+;##################################### UHCI ###########################################
+;######################################################################################
+.uhci:
+    cmp byte [uhci_found], 1
+    je .next_device
+
+    call get_pci_addr
+
+    add eax, 0x20
+    call pci_read
+    and eax, ~(1 << 0)
+    mov [uhci_base], eax
+
+    mov eax, ecx
+    add eax, 4
+    call pci_read
+    mov ebx, eax
+    and bx, 0xfdff
+
+    mov eax, ecx
+    add eax, 4
+    call pci_write
+
+    cmp dword [UHCI_ADDR], 'FAIL'
+    je .skip_uhci
+
+    mov eax, ecx
+    add eax, 0x3c
+    call pci_read
+
+    add al, 0x20
+    movzx ecx, al
+
+    mov edi, UHCI_ADDR
+    push ecx
+    call load_coff_obj
+    pop ecx
+    jc .skip_uhci
+
+    mov eax, [uhci_base]
+    push ecx
+    call edi
+    pop ecx
+
+.skip_uhci:
+    mov byte [uhci_found], 1
+    jmp .next_device
+
+;######################################################################################
+;##################################### OHCI ###########################################
+;######################################################################################
+
+.ohci:
+    cmp byte [ohci_found], 1
+    je .skip
+
+    call get_pci_addr
+
+    call read_bar0
+    and eax, 0xfffffff0
+    mov [ohci_base], eax
+    
+    push ebx
+    push ecx
+    mov ebx, 0x2000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    call map_region
+    pop ecx
+    pop ebx
+
+    mov eax, ecx
+    add eax, 4
+
+    call pci_read
+    mov ebx, eax
+    and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
+
+    mov eax, ecx
+    add eax, 4
+    call pci_write
+
+    ;check if OHCI driver is loaded
+    cmp dword [OHCI_ADDR], 'FAIL'
+    je .skip_ohci
+
+    ;get IRQ
+    mov eax, ecx
+    add eax, 0x3c
+    call pci_read
+
+    add al, 0x20
+    movzx ebx, al
+    mov eax, ohci_interrupt_handler
+    call set_irq
+
+    mov eax, [ohci_base]
+    call dword OHCI_ADDR
+    cmp ah, 0
+    je .skip_ohci
+
+    mov [usb_devices], ah
+
+    mov [usb_keybuffer], ebx
+
+    mov [usb_keyboard_tdptr], edi
+    mov [usb_keyboard_edptr], esi
+
+    ;get USB devices
+    mov esi, USB_DEVICE_LIST
+    movzx edx, ah
+.loop_usb_ohci:
+    lodsb
+    cmp al, 1
+    je .keyboard_ohci
+    cmp al, 3
+    je .usb_stick_ohci
+
+    cmp al, 0xee
+    je .skip_ohci
+    add esi, USB_LIST_ENTRY-1
+
+    dec dx
+    jnz .loop_usb_ohci
+
+    jmp .skip_ohci
+
+.keyboard_ohci:
+    mov byte [usb_keyboard_used], 1
+    add esi, USB_LIST_ENTRY-1
+    dec dx
+    jnz .loop_usb_ohci
+
+    jmp .skip_ohci
+.usb_stick_ohci:
+    movzx edi, byte [avail_disks]
+    imul edi, DRIVE_LIST_ENTRY
+    add edi, DRIVE_LIST_ADDR
+
+    ;copy vendor name
+    push esi
+    push edi
+    mov ecx, 8
+    rep movsb
+    pop edi
+    pop esi
+
+    mov byte [edi+8], 0x10      ;OHCI
+    mov byte [edi+9], 0xbe      ;USB
+
+    mov eax, [ohci_base]
+    mov [edi+12], eax
+
+    mov ax, [esi+32]
+    mov [edi+10], ax
+
+    mov eax, [esi+24]           ;max LBA
+    mov [edi+32], eax
+    mov eax, [esi+28]           ;block size
+    mov [edi+36], eax
+
+    push esi
+    add edi, 16
+    add esi, 8
+    mov ecx, 16
+    rep movsb
+    pop esi
+
+    inc byte [avail_disks]
+    add esi, USB_LIST_ENTRY-1
+    dec dx
+    jnz .loop_usb_ohci
+
+
+.skip_ohci:
+    mov byte [ohci_found], 1
+    jmp .next_device
+
+;######################################################################################
+;##################################### EHCI ###########################################
+;######################################################################################
+.ehci:
+    cmp byte [ehci_found], 1
+    je .next_device
+
+    call get_pci_addr
+
+    call read_bar0
+    and eax, 0xfffffff0
+    mov [ehci_base], eax
+    
+    push ebx
+    push ecx
+    mov ebx, 0x2000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    call map_region
+    pop ecx
+    pop ebx
+
+    mov eax, ecx
+    add eax, 4
+
+    call pci_read
+    mov ebx, eax
+    and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
+
+    mov eax, ecx
+    add eax, 4
+    call pci_write
+
+    ;check if EHCI driver is loaded
+    cmp dword [EHCI_ADDR], 'FAIL'
+    je .skip_ehci
+
+    ;get IRQ
+    mov eax, ecx
+    add eax, 0x3c
+    call pci_read
+
+    add al, 0x20
+    movzx ecx, al
+
+    mov edi, EHCI_ADDR
+    push ecx
+    call load_coff_obj
+    pop ecx
+    jc .skip_ehci
+
+    mov eax, [ehci_base]
+    push ecx
+    call edi
+    pop ecx
+
+.skip_ehci:
+    mov byte [ehci_found], 1
+    jmp .next_device
+
+;######################################################################################
+;#################################### SD CARD #########################################
+;######################################################################################
+.sdcard:
+    jmp .next_device
 
 .next_device:
     inc byte [pci_device]
@@ -219,165 +502,165 @@ scan_pci_driver:
     mov edx, ebx
     shr edx, 24
 
-    cmp dl, 0x0c
-    je .serial_bus_controller
+    ; cmp dl, 0x0c
+    ; je .serial_bus_controller
 
     jmp .skip
 .serial_bus_controller:
-    mov edx, ebx
-    shr edx, 16
-    cmp dl, 0x03
-    je .usb
+;     mov edx, ebx
+;     shr edx, 16
+;     cmp dl, 0x03
+;     je .usb
 
-    jmp .skip
-.usb:
-    mov edx, ebx
-    shr edx, 8
-    cmp dl, 0
-    je .uhci
-    cmp dl, 0x10
-    je .ohci
-    cmp dl, 0x20
-    je .ehci
-    cmp dl, 0x30
-    je .xhci
-    jmp .next_device
+;     jmp .skip
+; .usb:
+;     mov edx, ebx
+;     shr edx, 8
+;     cmp dl, 0
+;     je .uhci
+;     cmp dl, 0x10
+;     je .ohci
+;     cmp dl, 0x20
+;     je .ehci
+;     cmp dl, 0x30
+;     je .xhci
+;     jmp .next_device
 
-.uhci:
-    jmp .next_device
-.ohci:
-    cmp byte [ohci_found], 1
-    je .skip
+; .uhci:
+;     jmp .next_device
+; .ohci:
+;     cmp byte [ohci_found], 1
+;     je .skip
 
-    call get_pci_addr
+;     call get_pci_addr
 
-    call read_bar0
-    and eax, 0xfffffff0
-    mov [ohci_base], eax
+;     call read_bar0
+;     and eax, 0xfffffff0
+;     mov [ohci_base], eax
     
-    push ebx
-    push ecx
-    mov ebx, 0x2000
-    xor ecx, ecx
-    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
-    call map_region
-    pop ecx
-    pop ebx
+;     push ebx
+;     push ecx
+;     mov ebx, 0x2000
+;     xor ecx, ecx
+;     or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+;     call map_region
+;     pop ecx
+;     pop ebx
 
-    mov eax, ecx
-    add eax, 4
+;     mov eax, ecx
+;     add eax, 4
 
-    call pci_read
-    mov ebx, eax
-    and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
+;     call pci_read
+;     mov ebx, eax
+;     and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
 
-    mov eax, ecx
-    add eax, 4
-    call pci_write
+;     mov eax, ecx
+;     add eax, 4
+;     call pci_write
 
-    ;get IRQ
-    mov eax, ecx
-    add eax, 0x3c
-    call pci_read
+;     ;get IRQ
+;     mov eax, ecx
+;     add eax, 0x3c
+;     call pci_read
 
-    add al, 0x20
-    movzx ebx, al
-    mov eax, ohci_interrupt_handler
-    call set_irq
+;     add al, 0x20
+;     movzx ebx, al
+;     mov eax, ohci_interrupt_handler
+;     call set_irq
 
-    mov ah, 0x0a
-    mov edx, DIR_DRIVERS_ADDR
-    mov edi, OHCI_DRIVER_ADDR
-    mov esi, file_ohci_sys
-    mov bl, [drive_number]
-    int 0x33
-    jc .skip_ohci
+;     mov ah, 0x0a
+;     mov edx, DIR_DRIVERS_ADDR
+;     mov edi, OHCI_DRIVER_ADDR
+;     mov esi, file_ohci_sys
+;     mov bl, [drive_number]
+;     int 0x33
+;     jc .skip_ohci
 
-    mov eax, [ohci_base]
-    call dword OHCI_DRIVER_ADDR
-    cmp ah, 0
-    je .skip_ohci
+;     mov eax, [ohci_base]
+;     call dword OHCI_DRIVER_ADDR
+;     cmp ah, 0
+;     je .skip_ohci
 
-    mov [usb_devices], ah
+;     mov [usb_devices], ah
 
-    mov [usb_keybuffer], ebx
+;     mov [usb_keybuffer], ebx
 
-    mov [usb_keyboard_tdptr], edi
-    mov [usb_keyboard_edptr], esi
+;     mov [usb_keyboard_tdptr], edi
+;     mov [usb_keyboard_edptr], esi
 
-    ;get USB devices
-    mov esi, USB_DEVICE_LIST
-    movzx edx, ah
-.loop_usb_ohci:
-    lodsb
-    cmp al, 1
-    je .keyboard_ohci
-    cmp al, 3
-    je .usb_stick_ohci
+;     ;get USB devices
+;     mov esi, USB_DEVICE_LIST
+;     movzx edx, ah
+; .loop_usb_ohci:
+;     lodsb
+;     cmp al, 1
+;     je .keyboard_ohci
+;     cmp al, 3
+;     je .usb_stick_ohci
 
-    cmp al, 0xee
-    je .skip_ohci
-    add esi, USB_LIST_ENTRY-1
+;     cmp al, 0xee
+;     je .skip_ohci
+;     add esi, USB_LIST_ENTRY-1
 
-    dec dx
-    jnz .loop_usb_ohci
+;     dec dx
+;     jnz .loop_usb_ohci
 
-    jmp .skip_ohci
+;     jmp .skip_ohci
 
-.keyboard_ohci:
-    mov byte [usb_keyboard_used], 1
-    add esi, USB_LIST_ENTRY-1
-    dec dx
-    jnz .loop_usb_ohci
+; .keyboard_ohci:
+;     mov byte [usb_keyboard_used], 1
+;     add esi, USB_LIST_ENTRY-1
+;     dec dx
+;     jnz .loop_usb_ohci
 
-    jmp .skip_ohci
-.usb_stick_ohci:
-    movzx edi, byte [avail_disks]
-    imul edi, DRIVE_LIST_ENTRY
-    add edi, DRIVE_LIST_ADDR
+;     jmp .skip_ohci
+; .usb_stick_ohci:
+;     movzx edi, byte [avail_disks]
+;     imul edi, DRIVE_LIST_ENTRY
+;     add edi, DRIVE_LIST_ADDR
 
-    ;copy vendor name
-    push esi
-    push edi
-    mov ecx, 8
-    rep movsb
-    pop edi
-    pop esi
+;     ;copy vendor name
+;     push esi
+;     push edi
+;     mov ecx, 8
+;     rep movsb
+;     pop edi
+;     pop esi
 
-    mov byte [edi+8], 0x10      ;OHCI
-    mov byte [edi+9], 0xbe      ;USB
+;     mov byte [edi+8], 0x10      ;OHCI
+;     mov byte [edi+9], 0xbe      ;USB
 
-    mov eax, [ohci_base]
-    mov [edi+12], eax
+;     mov eax, [ohci_base]
+;     mov [edi+12], eax
 
-    mov ax, [esi+32]
-    mov [edi+10], ax
+;     mov ax, [esi+32]
+;     mov [edi+10], ax
 
-    mov eax, [esi+24]           ;max LBA
-    mov [edi+32], eax
-    mov eax, [esi+28]           ;block size
-    mov [edi+36], eax
+;     mov eax, [esi+24]           ;max LBA
+;     mov [edi+32], eax
+;     mov eax, [esi+28]           ;block size
+;     mov [edi+36], eax
 
-    push esi
-    add edi, 16
-    add esi, 8
-    mov ecx, 16
-    rep movsb
-    pop esi
+;     push esi
+;     add edi, 16
+;     add esi, 8
+;     mov ecx, 16
+;     rep movsb
+;     pop esi
 
-    inc byte [avail_disks]
-    add esi, USB_LIST_ENTRY-1
-    dec dx
-    jnz .loop_usb_ohci
+;     inc byte [avail_disks]
+;     add esi, USB_LIST_ENTRY-1
+;     dec dx
+;     jnz .loop_usb_ohci
 
 
-.skip_ohci:
-    mov byte [ohci_found], 1
-    jmp .next_device
-.ehci:
-    jmp .next_device
-.xhci:
-    jmp .next_device
+; .skip_ohci:
+;     mov byte [ohci_found], 1
+;     jmp .next_device
+; .ehci:
+;     jmp .next_device
+; .xhci:
+;     jmp .next_device
 
 .next_device:
     inc byte [pci_device]
@@ -904,3 +1187,14 @@ load_driver_assets:
 .error_load_drivers: db 'Error loading Drivers directory (either not found or disk error), ', 0x0a, 
                      db 'Keyboard, and other devices might not work. Restart the PC. If this keeps continuing,', 0x0a, 
                      db 'the directory is missing or the filesystem could be damaged', 0
+
+
+ohci_found: db 0
+uhci_found: db 0
+ehci_found: db 0
+xhci_found: db 0
+
+ohci_base: dd 0
+uhci_base: dd 0
+ehci_base: dd 0
+xhci_base: dd 0
