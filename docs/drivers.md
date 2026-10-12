@@ -56,9 +56,17 @@ it loads the driver.
 The drivers should be executed by the user in the shell. It should also be possible to write the loading command into a auto-execution file.
 
 
-### OHCI driver
-The loading process for the OHCI driver is special because of the early driver loading model and early stages of the kernel.   <br>
-When the kernel was not that advanced, it couldnt load relocatable files, so the files had to have a fixed address. <br>
-This is why the OHCI driver is a raw binary file and why data and code are mixed together. <br>
-To keep the driver anyway, it is now loaded to a specific address when finding an OHCI Controller while scanning PCI.   <br>
-Also, the driver knows where kernel structures are located in memory and it doesnt have a 'kernel_packet'.
+### Boot critical drivers
+Drivers are boot critical, when they are needed for loading other drivers and files
+
+The 
+- IDE Driver,
+- AHCI Driver,
+- NVME Driver,
+- USB Drivers (OHCI, UHCI, EHCI, XHCI USB Sticks),
+- Floppy Disc Driver,
+- SD Card Driver,
+
+are boot critical drivers. They are either loaded by the UEFI Bootloader or by the kernel, when it is in 16bit Real Mode.
+After, the kernel searches scans the PCI Bus for various controllers, like IDE, AHCI...
+When found, it just executes the right driver without having to load it.
