@@ -11,6 +11,56 @@ section .text
 _efi_main:
     mov [rel image_handle], rcx
     mov [rel system_table], rdx
+    ; mov r15, rdx
+
+    ; ;get boot drive information
+    ; push rbp
+    ; mov rbp, rsp
+    ; sub rsp, 48
+
+    ; lea rdx, [rel loaded_image_guid]
+    ; lea r8, [rel loaded_image_ptr]
+    ; mov r9, rcx
+
+    ; xor rax, rax
+    ; mov [rsp+32], rax
+    ; mov dword [rsp+40], 1
+
+    ; mov rsi, [r15+SYSTEM_TABLE.BOOT_SERVICES]
+    ; call qword [rsi+280]    ;OpenProtocol
+
+    ; mov rsp, rbp
+    ; pop rbp
+
+    ; test rax, rax
+    ; jnz .failed
+
+    ; mov rbx, [rel loaded_image_ptr]
+    ; mov rcx, [rbx+24]
+
+    ; push rbp
+    ; mov rbp, rsp
+    ; sub rsp, 48
+
+    ; lea rdx, [rel device_path_guid]
+    ; lea r8, [rel device_path]
+    ; mov r9, [rel image_handle]
+
+    ; xor rax, rax
+    ; mov [rsp+32], rax
+    ; mov dword [rsp+40], 1
+    ; mov rsi, [r15+SYSTEM_TABLE.BOOT_SERVICES]
+    ; call qword [rsi+280]
+
+    ; mov rsp, rbp
+    ; pop rbp
+
+    ; test rax, rax
+    ; jnz .failed
+
+    ; mov rbx, [rel device_path]
+    ; cli
+    ; hlt
 
     mov rax, [rdx+SYSTEM_TABLE.BOOT_SERVICES]
     lea rcx,[rel gop_guid]
@@ -354,6 +404,8 @@ _efi_main:
     lea rsi, [rel kernel_found_str]
     call print_string
 
+    call load_drivers
+
 .get_mmap:
     ;get memory map
     mov rax, [rel system_table]
@@ -645,6 +697,361 @@ exit_boot:
     jmp rax
 
 
+load_drivers:
+    ;open directory /DRIVERS/
+    mov rcx, [rel root]
+    lea rdx, [rel drivers_dir]
+    lea r8, [rel drivers_dir_name]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jnz .dir_failed
+
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel ohci_file]
+    lea r8, [rel ohci_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .ohci_get_size
+    mov rsi, OHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .uhci
+
+.ohci_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel ohci_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .ohci_load
+
+    mov rsi, OHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .uhci
+.ohci_load:
+    mov rax, [rel file_info+8]
+    mov [rel ohci_size], rax
+
+    mov rcx, [rel ohci_file]
+    lea rdx, [rel ohci_size]
+    mov r8, OHCI_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.uhci:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel uhci_file]
+    lea r8, [rel uhci_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .uhci_get_size
+    mov rsi, UHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .ehci
+
+.uhci_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel uhci_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .uhci_load
+
+    mov rsi, UHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .ehci
+.uhci_load:
+    mov rax, [rel file_info+8]
+    mov [rel uhci_size], rax
+
+    mov rcx, [rel uhci_file]
+    lea rdx, [rel uhci_size]
+    mov r8, UHCI_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.ehci:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel ehci_file]
+    lea r8, [rel ehci_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .ehci_get_size
+    mov rsi, EHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .xhci
+
+.ehci_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel ehci_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .ehci_load
+
+    mov rsi, EHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .xhci
+.ehci_load:
+    mov rax, [rel file_info+8]
+    mov [rel ehci_size], rax
+
+    mov rcx, [rel ehci_file]
+    lea rdx, [rel ehci_size]
+    mov r8, EHCI_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.xhci:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel xhci_file]
+    lea r8, [rel xhci_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .xhci_get_size
+    mov rsi, XHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .nvme
+
+.xhci_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel xhci_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .xhci_load
+
+    mov rsi, XHCI_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .nvme
+.xhci_load:
+    mov rax, [rel file_info+8]
+    mov [rel xhci_size], rax
+
+    mov rcx, [rel xhci_file]
+    lea rdx, [rel xhci_size]
+    mov r8, XHCI_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.nvme:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel nvme_file]
+    lea r8, [rel nvme_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .nvme_get_size
+    mov rsi, NVME_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .fdc
+
+.nvme_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel nvme_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .nvme_load
+
+    mov rsi, NVME_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .fdc
+.nvme_load:
+    mov rax, [rel file_info+8]
+    mov [rel nvme_size], rax
+
+    mov rcx, [rel nvme_file]
+    lea rdx, [rel nvme_size]
+    mov r8, NVME_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.fdc:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel fdc_file]
+    lea r8, [rel fdc_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .fdc_get_size
+    mov rsi, FDC_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .sdc
+
+.fdc_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel fdc_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .fdc_load
+
+    mov rsi, FDC_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .sdc
+.fdc_load:
+    mov rax, [rel file_info+8]
+    mov [rel fdc_size], rax
+
+    mov rcx, [rel fdc_file]
+    lea rdx, [rel fdc_size]
+    mov r8, FDC_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.sdc:
+    mov rcx, [rel drivers_dir]
+    lea rdx, [rel sdc_file]
+    lea r8, [rel sdc_sys]
+    mov r9, 1
+
+    sub rsp, 56
+    mov qword [rsp+32], 0
+    call qword [rcx+8]
+    add rsp, 56
+
+    test rax, rax
+    jz .sdc_get_size
+    mov rsi, SDC_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .done
+
+.sdc_get_size:
+    ;get file size
+    mov qword [rel info_size], 256
+
+    mov rcx, [rel sdc_file]
+    lea rdx, [rel file_info_guid]
+    lea r8, [rel info_size]
+    lea r9, [rel file_info]
+
+    sub rsp, 40
+    call qword [rcx+64]
+    add rsp, 40
+
+    test rax, rax
+    jz .sdc_load
+
+    mov rsi, SDC_ADDR
+    mov dword [rsi], 'FAIL'
+    jmp .done
+.sdc_load:
+    mov rax, [rel file_info+8]
+    mov [rel sdc_size], rax
+
+    mov rcx, [rel sdc_file]
+    lea rdx, [rel sdc_size]
+    mov r8, SDC_ADDR
+
+    sub rsp, 40
+    call qword [rcx+32]
+    add rsp, 40
+.done:
+    ret
+
+.dir_failed:
+    lea esi, [rel dir_err]
+    push rax
+    call print_string
+    pop rax
+    cli
+.loop:
+    hlt
+    jmp .loop
 ;----data---- 
 section .data
 image_handle: dq 0
@@ -668,6 +1075,17 @@ file_info_guid:
     dw 0x11d2
     db 0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b
 
+loaded_image_guid:
+    dd 0x5b1b31a1
+    dw 0x9562
+    dw 0x11d2
+    db 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
+
+device_path_guid:
+    dd 0x09576e91
+    dw 0x6d3f
+    dw 0x11d2
+    db 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b
 
 simple_fs: dq 0
 root: dq 0
@@ -700,10 +1118,20 @@ firmware_vendor: times 16 db 0
 firmware_revision: dd 0
 graphic_success: dw 'G','r','a','p','h','i','c',' ','M','o','d','e',' ','f','o','u','n','d', 0x0d, 0x0a, 0
 no_xga_str: dw 'N','o',' ','X','G','A',' ','f','o','u','n','d',0
+dir_err: dw 'D','r','i','v','e','r',' ','d','i','r','e','c','t','o','r','y',' ','n','o','t',' ','f','o','u','n','d', 0x0d, 0x0a, 0
 
-xmode_bin: dw '\','X','M','O','D','E','.','B','I','N'
+xmode_bin: dw '\','X','M','O','D','E','.','B','I','N', 0
 xmode_file: dq 0
 xmode_size: dq 0
+drivers_dir_name: dw '\','D','R','I','V','E','R','S', 0
+ohci_sys: dw 'O','H','C','I','.','S','Y','S', 0
+uhci_sys: dw 'U','H','C','I','.','S','Y','S', 0
+ehci_sys: dw 'E','H','C','I','.','S','Y','S', 0
+xhci_sys: dw 'X','H','C','I','.','S','Y','S', 0
+nvme_sys: dw 'N','V','M','E','.','S','Y','S', 0
+fdc_sys: dw 'F','D','C','.','S','Y','S', 0
+sdc_sys: dw 'S','D','C','.','S','Y','S', 0
+
 cfg_bin: dw '\','X','C','O','N','F','I','G','S','\','B','O','O','T','.','C','F','G', 0
 cfg_file: dq 0
 cfg_size: dq 0
@@ -723,7 +1151,7 @@ map_key         dq 0
 desc_size       dq 0
 desc_ver        dd 0
 
-MEM_MAP_ADDR            equ 0x70000
+MEM_MAP_ADDR            equ 0x75000
 
 keymap:
     db 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
@@ -733,6 +1161,15 @@ keymap:
     db 0, 1,  2,  3,  4,  5,  6,  7,  8,  9, 10
     db 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
     db 21, 22, 23, 24, 25,
+
+OHCI_ADDR       equ 0x61000
+UHCI_ADDR       equ 0x64000
+EHCI_ADDR       equ 0x67000
+XHCI_ADDR       equ 0x69000
+NVME_ADDR       equ 0x6d000
+FDC_ADDR        equ 0x70000
+SDC_ADDR        equ 0x72000
+
 section .bss
 kernel_packet:
     resq 1        ;pointer to buffer with firmware vendor
@@ -745,6 +1182,34 @@ kernel_packet:
     resd 1        ;width
     resd 1        ;height
     resd 1        ;bytes per pixel
+
+loaded_image_ptr: resq 1
+device_path: resq 1
+
+drivers_dir: resq 1
+drivers_file: resq 1
+drivers_size: resq 1
+
+ohci_file: resq 1
+ohci_size: resq 1
+
+uhci_file: resq 1
+uhci_size: resq 1
+
+ehci_file: resq 1
+ehci_size: resq 1
+
+xhci_file: resq 1
+xhci_size: resq 1
+
+nvme_file: resq 1
+nvme_size: resq 1
+
+fdc_file: resq 1
+fdc_size: resq 1
+
+sdc_file: resq 1
+sdc_size: resq 1
 
 char: resd 1
 res_buffer: resd 64*8
