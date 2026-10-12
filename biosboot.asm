@@ -181,6 +181,7 @@ kernel_loop:
 loaded:
     mov si, ok_msg
     call print_start
+    mov dl, [BS_DriveNumber]
     mov ax, [RootDirSectors]
     mov [0x7e00], ax
     mov ax, [RootStartSec]
