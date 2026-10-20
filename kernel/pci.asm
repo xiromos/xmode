@@ -8,6 +8,36 @@ scan_disk_pci:
     call load_coff_obj
     jc .skip_fdc
     call edi
+    cmp ah, 1
+    je .skip_fdc
+
+    mov eax, [edx+8]
+    mov ebx, 0x26
+    call set_idt_entry
+
+    ;put floppy drives into drive list
+    mov edi, DRIVE_LIST_ADDR
+    mov [fdc_kernel_packet], edx
+
+    mov al, [edx+12]    ;drive type
+    cmp al, 0
+    je .fd_drive_b
+
+    mov [edi+8], al
+    mov al, [edx+13]
+    mov [edi+10], al
+    mov byte [edi+9], 0xfd
+
+.fd_drive_b:
+    mov al, [edx+14]
+    cmp al, 0
+    je .skip_fdc
+
+    mov [edi+108], al
+    mov al, [edx+15]
+    mov [edi+110], al
+    mov byte [edi+109], 0xfd
+
 .skip_fdc:
     mov byte [avail_disks], 2
     xor ebx, ebx
@@ -262,6 +292,7 @@ scan_disk_pci:
     cmp ah, 0
     je .skip_ohci
 
+    mov [ohci_kernel_packet], edx
     mov [usb_devices], ah
 
     mov [usb_keybuffer], ebx

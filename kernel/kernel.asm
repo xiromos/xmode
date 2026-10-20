@@ -361,6 +361,23 @@ main:
     call search_boot_device
     call get_bpb_data
 
+    mov dl, 6
+    mov dh, 0x0b
+    xor ecx, ecx
+    mov edi, 0x5000
+    mov ax, 1
+    call read_drive
+
+    cli
+    hlt
+
+    ; mov dl, 6
+    ; mov dh, 0x0b
+    ; mov ecx, 4
+    ; mov edi, 0x5A00
+    ; mov ax, 4
+    ; call read_drive
+
     mov ax, [root_entries]
     mov bx, 32
     mul bx
@@ -656,7 +673,7 @@ search_boot_device:
     mov ecx, 512
     int 0x35
 
-    xor edx, edx
+    mov edx, 2  ;xor edx, edx
 .loop:
     cmp dl, [avail_disks]
     ja .error
@@ -769,10 +786,32 @@ load_configs:
     int 0x33
     jc .error
 
-    ;load BGCOLOR.CFG from configs directory
+
+    xor ah, ah
+    mov edi, CONFIG_DIR_BUFFER
+    mov esi, file_mouse2_bmp
+    mov bl, [drive_number]
+    int 0x33
+    jc .error
+
+    mov ah, 0x0a
+    int 0x35
+
+    mov dword [ps2_mouse_handler.mouse_border_bmp], esi
+
+    ;load MOUSE2.BMP from configs directory
+    mov edx, CONFIG_DIR_BUFFER
+    mov edi, esi
+    mov esi, file_mouse2_bmp
+    mov bl, [drive_number]
+    mov ah, 0x0a
+    int 0x33
+    jc .error
+
+    ;load COLOR.CFG from configs directory
     mov edx, CONFIG_DIR_BUFFER          ;from where to load
     mov edi, CONFIGS_FILE_BUFFER        ;where to load
-    mov esi, file_bgcolor_cfg           ;what to load
+    mov esi, file_color_cfg             ;what to load
     mov bl, [drive_number]
     mov ah, 0x0a
     int 0x33
@@ -826,8 +865,51 @@ load_configs:
     je .done
 
     sub esi, 1
+    push esi
     call string_to_hex6
     mov [win_border_color], esi
+    pop esi
+
+
+    mov edi, .loop_mouse
+    add esi, 6
+
+.loop_mouse:
+    lodsb
+    cmp al, '#'
+    je .skip_comment
+    cmp al, 0x20
+    je .loop
+    cmp al, 0x0a
+    je .loop
+    cmp al, 0
+    je .done
+
+    sub esi, 1
+    push esi
+    call string_to_hex6
+    mov [ps2_mouse_handler.cursor_color], esi
+    pop esi
+
+    mov edi, .loop_mouse_border
+    add esi, 6
+.loop_mouse_border:
+    lodsb
+    cmp al, '#'
+    je .skip_comment
+    cmp al, 0x20
+    je .loop
+    cmp al, 0x0a
+    je .loop
+    cmp al, 0
+    je .done
+
+    sub esi, 1
+    push esi
+    call string_to_hex6
+    mov [ps2_mouse_handler.cursor_border_color], esi
+    pop esi
+
 .done:
     ret
 .skip_comment:
@@ -864,7 +946,7 @@ set_pages:
     rep stosd
 
     mov edi, PAGES_BASE
-    mov ecx, 4          ;map 20MB (4 pages)
+    mov ecx, 4          ;map 16MB (4 pages)
     mov esi, PAGE_DIR
     xor eax, eax
 .loop:
@@ -986,6 +1068,7 @@ map_region:
     ret
 
 idle_task:
+    sti
     nop
     nop
     nop
@@ -1309,16 +1392,26 @@ load_drivers:
     xor al, al
     out dx, al
 
+    ; mov ebx, .timer
+    ; mov edx, 40     ;40ms
+    ; mov ah, 0x22
+    ; mov al, 2
     mov dx, 0x22e
 .sb_rdy:
     in al, dx
     test al, (1 << 7)
+    ; cmp dword [timer], 40
+    ; jae .sb_err
+
     jz .sb_rdy
 
     mov dx, 0x22a
     in al, dx
     ret
-
+.sb_err:
+    xor al, al
+    ret
+.timer: dd 0
 .check_ps2_mouse:
     ;load driver file
     mov esi, file_ps2mouse_sys
@@ -1788,9 +1881,12 @@ bios_load_drivers:
     pop dx
     jc .error_load
 
+    push dx
+    xor dx, dx
     movzx ax, byte [.sec_per_cluster]
     mov bx, [.bytes_per_sec]
     mul bx
+    pop dx
 
     clc
     mov cx, [dap+4]
@@ -1825,10 +1921,13 @@ bios_load_drivers:
     ret
 .cluster_to_sec:
     push cx
+    push dx
+    xor dx, dx
     sub ax, 2
     movzx cx, byte [.sec_per_cluster]
     mul cx
     add ax, bp
+    pop dx
     pop cx
     ret
 .addr_to_seg_off:
