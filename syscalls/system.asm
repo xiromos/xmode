@@ -9,10 +9,21 @@
 ;AH = 0x04: terminate a task (not the caller)                                                           ;EBX = PID or ESI = Taskname (if one is set, other should be zero)  CF on error
 ;   Error ist set if the PID is 0 or 1 or if the task is a kernel task
 ;AH = 0x05: terminate the process which called the syscall
-;AH = 0x07: change task state
-;   AL = 0x01: task state = sleeping
+;AH = 0x07: change task flags
+;   ## change task flags of current task (the caller task)
+;   AL = 0x00: clear sleeping flag (current task)
+;   AL = 0x01: set sleeping flag (current task)
+
+;   ## change task flags of other tasks (expects task PID in BX)
+;   AL = 0x80: clear sleeping flag (task PID in BX)
+;       BX = PID
+;   AL = 0x81: set sleeping flag (task PID in BX)
+;       BX = PID
+;AH = 0x08: get PID of current task                                                                     ;output: AX = PID
 ;AH = 0x0A: allocate heap                                                                               ;Input: ECX = size         Output: ESI = pointer to heap chunk
 ;AH = 0x0B: free heap                                                                                   ;Input: ESI = pointer to allocated chunk, ECX = size
+;AH = 0x0C: allocate heap from low memory area                                                          ;Input: ECX = size         Output: ESI = pointer to heap chunk
+;AH = 0x0D: free heap from low memory area                                                              ;Input: ESI = pointer to allocated chunk, ECX = size
 
 ;AH = 0x12: start already loaded task in foreground                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
 ;AH = 0x13: start already loaded task in background                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
@@ -69,6 +80,8 @@ program_sys_handler:
     je .terminate_process
     cmp ah, 0x07
     je change_task_state
+    cmp ah, 0x08
+    je .get_pid
     cmp ah, 0x0a
     je alloc_heap
     cmp ah, 0x0b
@@ -174,6 +187,9 @@ program_sys_handler:
     cli
     hlt
 
+.get_pid:
+    mov ax, [current_task]
+    iret
 
 start_task_bg2:
     ;EBX = Task Address
@@ -475,18 +491,52 @@ kill_task:
 change_task_state:
     cli
     pusha
+    cmp al, 0
+    je .clear_sleep
     cmp al, 0x01
     je .sleep
-    cmp al, 0x02
 
+    cmp bx, word [max_tasks]
+    ja .error
+
+    cmp al, 0x80
+    je .clear_sleep_pid
+    cmp al, 0x81
+    je .sleep_pid
+
+.error:
     popa
     or dword [esp+8], 1
     iret
+.clear_sleep:
+    movzx ecx, word [current_task]
+    imul ecx, TASK_SIZE
+    add ecx, tasks_esp
+    cmp dword [ecx+11], TASK_FLAG_SLEEPING
+    jne .error
+    mov dword [ecx+11], 0
+    jmp .done
+
 .sleep:
     movzx ecx, word [current_task]
     imul ecx, TASK_SIZE
     add ecx, tasks_esp
-    mov dword [ecx+11], 0x0000b100  ;sleeping
+    mov dword [ecx+11], TASK_FLAG_SLEEPING  ;sleeping
+    jmp .done
+
+.clear_sleep_pid:
+    movzx ecx, bx
+    imul ecx, TASK_SIZE
+    add ecx, tasks_esp
+    cmp dword [ecx+11], TASK_FLAG_SLEEPING
+    jne .error
+    mov dword [ecx+11], 0
+    jmp .done
+.sleep_pid:
+    movzx ecx, bx
+    imul ecx, TASK_SIZE
+    add ecx, tasks_esp
+    mov dword [ecx+11], TASK_FLAG_SLEEPING  ;sleeping
 .done:
     popa
     and dword [esp+8], 0xfffffffe

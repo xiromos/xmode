@@ -70,9 +70,9 @@ string_to_hex6:
 .loop:
     lodsb
 
-    push ax
-    call print_char
-    pop ax
+    ; push ax
+    ; call print_char
+    ; pop ax
 
     cmp al, 0
     je .done_convert

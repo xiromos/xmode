@@ -1660,7 +1660,7 @@ write_ahci:
 ; BYTE 1: Host Controller Interface (0x10 = OHCI, 0x15 = UHCI, 0x20 = EHCI, 0x30 = XHCI)
 ; BYTE 2: 0xBE (Drive Type)
 ; WORD 1: USB Address
-; DWORD 1: Base (OHCI_BASE)
+; DWORD 1: Base Address (MMIO or I/O)
 ; 16 BYTES: Product name
 ; DWORD 2: max. LBA
 ; DWORD 3: block size
@@ -1700,10 +1700,12 @@ ide_init:
     mov [edi+19], ebx       ;block size
 
     push edi
+    push ecx
     add edi, 23
     mov ecx, 32
     mov esi, .name_buffer
     rep movsb
+    pop ecx
     pop edi
 
     cmp cl, 0xaf
@@ -1720,7 +1722,7 @@ ide_init:
     je .device2
     mov eax, [bm_base]
     mov [edi], eax
-    mov [edi+10], bl        ;DMA supported y/n
+    mov [edi+10], ch        ;DMA supported y/n
 
 .device2:
     mov dx, 0x1f0
@@ -1741,10 +1743,12 @@ ide_init:
     mov [edi+19], ebx       ;block size
 
     push edi
+    push ecx
     add edi, 23
     mov ecx, 32
     mov esi, .name_buffer
     rep movsb
+    pop ecx
     pop edi
 
     cmp cl, 0xaf
@@ -1761,7 +1765,7 @@ ide_init:
     je .device3
     mov eax, [bm_base]
     mov [edi], eax
-    mov [edi+10], bl
+    mov [edi+10], ch
 
 .device3:
     mov dx, 0x170
@@ -1782,10 +1786,12 @@ ide_init:
     mov [edi+19], ebx       ;block size
 
     push edi
+    push ecx
     add edi, 23
     mov ecx, 32
     mov esi, .name_buffer
     rep movsb
+    pop ecx
     pop edi
 
     cmp cl, 0xaf
@@ -1802,7 +1808,7 @@ ide_init:
     je .device4
     mov eax, [bm_base]
     mov [edi], eax
-    mov [edi+10], bl
+    mov [edi+10], ch
 
 .device4:
     mov dx, 0x170
@@ -1823,10 +1829,12 @@ ide_init:
     mov [edi+19], ebx       ;block size
 
     push edi
+    push ecx
     add edi, 23
     mov ecx, 32
     mov esi, .name_buffer
     rep movsb
+    pop ecx
     pop edi
 
     cmp cl, 0xaf
@@ -1843,7 +1851,7 @@ ide_init:
     je .done
     mov eax, [bm_base]
     mov [edi], eax
-    mov [edi+10], bl
+    mov [edi+10], ch
 .done:
     popa
     ret
@@ -1852,10 +1860,19 @@ ide_init:
 
 identify_ata:
     ;DX = 1. Channel
+    ;AL = 0xA0 / 0xB0
 
     mov bx, dx
     add dx, 6
     out dx, al
+
+    mov dx, bx
+    add dx, 7
+    in al, dx
+    cmp al, 0
+    je .no_device
+    cmp al, 0xff
+    je .no_device
 
     mov cx, 4
 .loop:
@@ -1923,6 +1940,7 @@ identify_ata:
 
     mov esi, 0x200000
 
+    mov ch, bl
     mov ebx, 512
     test word [esi+212], (1 << 12)
     jz .skip_read_blocksize
@@ -1984,6 +2002,7 @@ identify_ata:
 
     clc
     mov cl, 0xaf
+    xor ch, ch
     ret
 
 
@@ -2022,6 +2041,8 @@ read_drive:
     je .ide
     cmp byte [esi+9], 0xbe
     je .usb
+    cmp byte [esi+9], 0xfd
+    je .floppy
 .error:
     ;no drive found
     popa
@@ -2037,7 +2058,7 @@ read_drive:
     cmp byte [esi+10], 1
     je .ide_dma
 
-    mov ebx, eax        ;sectors in EBX
+    movzx ebx, ax       ;sectors in EBX
     mov dx, [esi+6]     ;Base Channel
     mov al, [esi+4]     ;Master / Slave
 
@@ -2047,14 +2068,14 @@ read_drive:
 
 .ide_ext_lba:
     mov dx, [esi+6]         ;base channel
-    mov ebx, eax
+    movzx ebx, ax
     mov al, [esi+4]         ;Master / Slave
 
     call read_ide_sectors_ext
     jc .error
     jmp .done
 .ide_dma:
-    mov ebx, eax
+    movzx ebx, ax
     mov al, [esi+4]
     mov ah, [esi+5]
     mov dx, [esi]
@@ -2083,6 +2104,7 @@ read_drive:
 
 
 .usb:
+    push ax
     mov al, [esi+8]
     cmp al, 0x10
     je .ohci
@@ -2092,25 +2114,43 @@ read_drive:
     je .ehci
     cmp al, 0x30
     je .xhci
+    pop ax
 
     jmp .error
 
 .ohci:
-    ; call dword [ohci_read_sectors]
-    ; jc .error
-    ; jmp .done
-    jmp .error
+    pop ax
+    cmp dh, 0x0a
+    je .error
+    mov bl, [esi+10]
+    mov edx, [ohci_kernel_packet]
+    call dword [edx]
+    jc .error
+    jmp .done
 .uhci:
-    call dword [uhci_read_sectors]
+    pop ax
     jc .error
-    jmp .done
+    jmp .error
 .ehci:
-    call dword [ehci_read_sectors]
+    pop ax
+    jc .error
+    jmp .error
+.xhci:
+    pop ax
+    jc .error
+    jmp .error
+.floppy:
+    cmp dh, 0x0a
+    jne .floppy_next
+
+    movzx ecx, word [ecx]
+.floppy_next:
+    movzx ebx, byte [esi+10]
+    mov bh, [esi+8] ;floppy type
+    mov edx, [fdc_kernel_packet]
+    call dword [edx]
     jc .error
     jmp .done
-.xhci:
-    call dword [xhci_read_sectors]
-    jc .error
 .done:
     popa
     clc
@@ -2135,6 +2175,8 @@ write_drive:
     je .ide
     cmp byte [esi+9], 0xbe
     je .usb
+    cmp byte [esi+9], 0xfd
+    je .floppy
 
 .error:
     popa
@@ -2198,9 +2240,58 @@ write_drive:
     clc
     ret
 .usb:
-    popa
-    clc
-    ret
+    push ax
+    mov al, [esi+8]
+    cmp al, 0x10
+    je .ohci
+    cmp al, 0x15
+    je .uhci
+    cmp al, 0x20
+    je .ehci
+    cmp al, 0x30
+    je .xhci
+    pop ax
+
+    jmp .error
+
+.ohci:
+    pop ax
+    cmp dh, 0x0b
+    je .ohci_write
+
+    mov ecx, [ecx]
+.ohci_write:
+    mov bl, [esi+10]
+    mov esi, edi
+    mov edx, [ohci_kernel_packet]
+    call dword [edx+4]
+    jc .error
+    jmp .done
+.uhci:
+    pop ax
+    jc .error
+    jmp .error
+.ehci:
+    pop ax
+    jc .error
+    jmp .error
+.xhci:
+    pop ax
+    jc .error
+    jmp .error
+.floppy:
+    cmp dh, 0x0a
+    jne .floppy_next
+
+    movzx ecx, word [ecx]
+.floppy_next:
+    movzx ebx, byte [esi+10]
+    mov bh, [esi+8]
+    mov esi, edi
+    mov edx, [fdc_kernel_packet]
+    call dword [edx+4]
+    jc .error
+    jmp .done
 .done:
     popa
     clc
@@ -2209,7 +2300,7 @@ write_drive:
 ;===========================================ATA PIO MODE===============================================0
 read_ide_sectors:
     cmp ebx, 0
-    je .reset_disk
+    je .error
 
     mov [base_channel], dx
     add dx, 7
@@ -2218,10 +2309,6 @@ read_ide_sectors:
     in al, dx
     test al, 0x80
     jnz .wait
-    jmp .disk_ok
-.reset_disk:
-    call reset_ata
-    jmp .read_done
 .disk_ok:
     cmp ebx, 256
     jb .last_read
@@ -2994,15 +3081,18 @@ read_ide_dma:
     mov dword [eax+11], 0x0000df00      ;set attribute: waiting for drive
     sti
     int 0x20
-; .wait_loop:
-;     cmp byte [ide_done], 1
-;     je .done
-;     int 0x20
-;     jmp .wait_loop
-; .done:
+
+    cli
+    mov al, [ide_running]
+    mov byte [ide_running], 0
+    cmp al, 2
+    je .error
+    sti
+
     clc
     ret
 .error:
+    sti
     stc
     ret
 
@@ -3164,6 +3254,7 @@ write_ide_dma:
     mov al, 0x01    ;write
     out dx, al
 
+.end:
     cli
     movzx eax, word [current_task]
     imul eax, TASK_SIZE
@@ -3173,10 +3264,18 @@ write_ide_dma:
     sti
     int 0x20
 
+    cli
+    mov al, [ide_running]
+    mov byte [ide_running], 0
+    cmp al, 2
+    je .error
+    sti
+
     clc
     ret
 
 .error:
+    sti
     stc
     ret
 
@@ -3243,5 +3342,4 @@ write_ide_dma:
     mov al, 0x01    ;write
     out dx, al
 
-    clc
-    ret
+    jmp .end

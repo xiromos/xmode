@@ -939,9 +939,8 @@ irq14_handler:
     jne .done
     mov byte [ide_running], 0
 
-    movzx eax, word [current_task]
-    imul eax, TASK_SIZE
-    add eax, tasks_esp
+    mov eax, tasks_esp
+    add eax, TASK_SIZE  ;skip task 0
     movzx edx, word [max_tasks]
 .loop:
     cmp dword [eax+11], 0x0000df00
@@ -962,12 +961,10 @@ irq14_handler:
     iret
 
 .error:
-    mov al, '%'
-    call print_char
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
-    mov byte [ide_running], 0
+    mov byte [ide_running], 2
     popa
     iret
 
@@ -1000,9 +997,8 @@ irq15_handler:
     jne .done
     mov byte [ide_running], 0
 
-    movzx eax, word [current_task]
-    imul eax, TASK_SIZE
-    add eax, tasks_esp
+    mov eax, tasks_esp
+    add eax, TASK_SIZE
     movzx edx, word [max_tasks]
 .loop:
     cmp dword [eax+11], 0x0000df00
@@ -1023,12 +1019,10 @@ irq15_handler:
     iret
 
 .error:
-    mov al, '%'
-    call print_char
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
-    mov byte [ide_running], 0
+    mov byte [ide_running], 2
     popa
     iret
 
@@ -1115,16 +1109,14 @@ ohci_interrupt_handler:
     mov ebx, [eax+12]       ;interrupt status
     test ebx, (1 << 1)
     jz .done                ;no WDH
-    ; test ebx, (1 << 31)
-    ; jz .done
+    
     mov dword [eax+12], (1 << 1)
 
-    ; test ebx, 2
-    ; jz .skip_keyboard
+    mov edx, [eax+0x30]         ;read HcDoneHead
+    mov edx, [hcca+0x84]        ;because of a bug, HcDoneHead contains always the value 0, so interrupt handler reads the address of the TD from HCCA
+    cmp edx, 0
+    je .done
 
-    mov edx, [eax+0x30]         ;read DoneHead
-    ;mov dword [eax+0x30], 0     ;clear DoneHead to unblock controller
-    mov edx, [hcca+0x84]
     mov bl, [edx+16]
     cmp bl, 1
     je .keyboard
@@ -1227,12 +1219,18 @@ ohci_interrupt_handler:
     jmp .done
 .usb_stick:
     mov byte [edx+17], 0
-    mov ebx, [edx+4]    ;CSW Buffer
-    cmp dword [ebx], 'USBS'
-    cmp byte [ebx+12], 0
-    ;jne .error
-    ; cli
-    ; hlt
+    movzx eax, word [edx+18]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    mov dword [eax+11], 0       ;clear sleeping flag
+
+    ;check errors
+    mov eax, [edx]
+    shr eax, 28
+    cmp eax, 0
+    je .done
+
+    mov byte [edx+17], 2
 .done:
     popa
     ret
@@ -1361,13 +1359,31 @@ ps2_mouse_handler:
     dec edx
     jnz .loop2
 
-    mov esi, [.mouse_bmp]
-    cmp esi, 0xffffffff
-    jne .skip5
+    cmp dword [.mouse_bmp], 0xffffffff
+    je .draw_standard
+    cmp dword [.mouse_border_bmp], 0xffffffff
+    je .draw_standard
 
-    mov esi, .standard
-.skip5:
+    ;draw custom cursor
+    mov esi, [.mouse_bmp]
+    mov eax, [.cursor_color]
     call .draw_cursor
+
+    mov esi, [.mouse_border_bmp]
+    mov eax, [.cursor_border_color]
+    call .draw_cursor
+    jmp .skip5
+
+    ;draw standard cursor
+.draw_standard:
+    mov esi, .standard
+    mov eax, [.cursor_color]
+    call .draw_cursor
+
+    mov esi, .standard_border
+    mov eax, [.cursor_border_color]
+    call .draw_cursor
+.skip5:
     mov eax, [.m_cur_x]
     mov [.prev_curX], eax
     mov eax, [.m_cur_y]
@@ -1383,8 +1399,10 @@ ps2_mouse_handler:
 
 ; #### DRAW CURSOR BITMAP ####
 .draw_cursor:
+    ;EAX = color
     pusha
 
+    push eax
     mov eax, [.m_cur_y]
     imul eax, [pitch]        ; y * pitch
 
@@ -1396,6 +1414,7 @@ ps2_mouse_handler:
     add eax, [frame_buffer]
 
     mov ebx, eax             ; ebx = start address
+    pop eax
 
     mov ecx, 16               ; rows
 .row:
@@ -1410,13 +1429,14 @@ ps2_mouse_handler:
     cmp byte [bpp], 4
     je .draw32
 
-    mov eax, [.cursor_color]
+    push eax
     mov [edi], ax
     shr eax, 16
     mov [edi+2], al
+    pop eax
+
     jmp .skip7
 .draw32:
-    mov eax, [.cursor_color]
     mov [edi], eax
 .skip7:
     shl dl, 1
@@ -1439,15 +1459,17 @@ ps2_mouse_handler:
 .m_cur_x: dd 0
 .m_cur_y: dd 0
 .mouse_bmp: dd 0xffffffff
-.cursor_color: dd 0xffffffff
+.mouse_border_bmp: dd 0xffffffff
+.cursor_color: dd 0x00ffffff
+.cursor_border_color: dd 0
 .standard:
     db 0b10000000
     db 0b11000000
-    db 0b10100000
-    db 0b10010000
-    db 0b10001000
-    db 0b10000100
-    db 0b10000010
+    db 0b11100000
+    db 0b11110000
+    db 0b11111000
+    db 0b11111100
+    db 0b11111110
     db 0b11111111
     db 0b00111000
     db 0b00111000
@@ -1457,6 +1479,25 @@ ps2_mouse_handler:
     db 0b00001110
     db 0b00001110
     db 0b00000000
+
+.standard_border:
+    db 0b10000000
+    db 0b11000000
+    db 0b10100000
+    db 0b10010000
+    db 0b10001000
+    db 0b10000100
+    db 0b10000010
+    db 0b11111111
+    db 0b00101000
+    db 0b00101000
+    db 0b00010100
+    db 0b00010100
+    db 0b00010100
+    db 0b00001010
+    db 0b00001010
+    db 0b00000000
+
 .prev_bg: dd 0xffffeeee      ;pointer to buffer with old background
 .prev_curX: dd 0
 .prev_curY: dd 0
