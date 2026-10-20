@@ -16,9 +16,9 @@
 
 \USB
 # Put here USB driver
-%FFFF $0x0002 *UHCI.SYS
-%FFFF $0x0003 *EHIC.SYS
-%FFFF $0x0004 *XHCI.SYS
+# %FFFF $0002 *UHCI.SYS
+# %FFFF $0003 *EHCI.SYS
+# %FFFF $0004 *XHCI.SYS
 
 # See driver interface at /docs/drivers.md
 # End of file marker:

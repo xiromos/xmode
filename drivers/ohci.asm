@@ -22,7 +22,7 @@ get_ohci_devices:
     test edi, 1
     jnz .wait_reset_end
 
-    mov dword [eax+0x14], (1 << 31)     ;Master Interrupt Disable
+    mov dword [eax+0x14], (1 << 31) | (1 << 1)     ;Master Interrupt Disable
 
     mov edi, hcca
 
@@ -1089,15 +1089,17 @@ init_ohci_port:
 .sense_buffer: times 18 db 0
 
 .cbw_buffer: times 31 db 0
+.csw_buffer: times 13 db 0
+
 align 16
 .td_cbw: times 4 dd 0
 .td_csw:
     times 4 dd 0
     db 3    ;USB Stick
     db 0    ;status: 0 = ready, 1 = busy
-.inquiry_buffer: times 36 db 0
-.csw_buffer: times 13 db 0
+    dw 0    ;task ID
 .capacity_buffer: times 8 db 0
+.inquiry_buffer: times 36 db 0
 
 ;#####################################################
 ;=============EXTERNAL SSD INIT=======================
@@ -1225,7 +1227,7 @@ max_lba: dd 0
 ;#####################################################
 
 usb_read_sectors:
-    ;AL = sector count of 512B sectors
+    ;AX = sectors 
     ;BL = USB address
     ;ECX = LBA
     ;EDI = Buffer
@@ -1235,20 +1237,27 @@ usb_read_sectors:
     cmp ecx, edx
     jae .error
 
-    cmp al, 0
+    cmp ax, 0
     je .error
 
 .loop:
+    hlt
     cmp byte [init_ohci_port.td_csw+17], 1
     je .loop
 
     mov byte [init_ohci_port.td_csw+17], 1
 
+    push ax
+    mov ah, 0x08
+    int 0x35
+    mov [init_ohci_port.td_csw+18], ax      ;store current PID
+    pop ax
+
+
     push ebx
-    movzx edx, al
+    movzx edx, ax
     imul edx, 512
     push edx
-
     mov ebx, edx
     xor edx, edx
     add ebx, [block_size]
@@ -1275,19 +1284,21 @@ usb_read_sectors:
     mov esi, edi
     mov ebp, edx
 
-    mov [init_ohci_port.cbw_buffer+8], edx  ;read 1 block
+    mov [init_ohci_port.cbw_buffer+8], edx
     mov byte [init_ohci_port.cbw_buffer+12], 0x80
     mov byte [init_ohci_port.cbw_buffer+13], 0
     mov byte [init_ohci_port.cbw_buffer+14], 10
     mov byte [init_ohci_port.cbw_buffer+15], 0x28 ;READ(10)
-    mov [init_ohci_port.cbw_buffer+16], ecx
-    mov word [init_ohci_port.cbw_buffer+20], 0
-    mov byte [init_ohci_port.cbw_buffer+23], bl    ;1 block
+    mov [init_ohci_port.cbw_buffer+17], ecx
+    mov byte [init_ohci_port.cbw_buffer+21], 0
+    xchg bl, bh                                   ;convert to Big Endian
+    mov [init_ohci_port.cbw_buffer+22], bx
     pop ebx
 
     mov edi, init_ohci_port.td_cbw
     mov dword [edi], 0
     or dword [edi], (1 << 19)   ;OUT
+    or dword [edi], (7 << 21)   ;no interrupt
     or dword [edi], (0xf << 28)    ;not accessed
 
     mov edx, init_ohci_port.cbw_buffer
@@ -1301,6 +1312,7 @@ usb_read_sectors:
     mov edi, td_data
     mov dword [edi], 0
     or dword [edi], (0xf << 28)
+    or dword [edi], (7 << 21)
     or dword [edi], (2 << 19)        ;IN
 
     mov [edi+4], esi
@@ -1321,7 +1333,6 @@ usb_read_sectors:
     mov edx, init_ohci_port.csw_buffer+12
     mov [edi+12], edx
 
-
     mov dword  [bulk_out_ed+4], td_empty
     mov dword [bulk_out_ed+8], init_ohci_port.td_cbw
     mov dword [bulk_out_ed+12], bulk_in_ed
@@ -1334,49 +1345,217 @@ usb_read_sectors:
     mov dword [bulk_in_ed+8], td_data
     mov dword [bulk_in_ed+12], 0
 
+    mov dword [eax+0x28], bulk_out_ed
     or dword [eax+8], 4
-.wait_read1:
-    mov edx, [init_ohci_port.td_cbw]
-    shr edx, 28
-    cmp edx, 0x0f
-    je .wait_read1
 
-    cmp edx, 0
-    jne .error
+    ;set task state to 'sleeping'
+    cli
+    mov ah, 0x07
+    mov al, 1
+    int 0x35
+    sti
+    int 0x20
 
-.wait_read2:
-    mov edx, [td_data]
-    shr edx, 28
-    cmp edx, 0x0f
-    je .wait_read2
+    cmp byte [init_ohci_port.td_csw+17], 2
+    je .error
 
-    cmp edx, 0
-    jne .error
-
-.wait_read3:
-    mov edx, [init_ohci_port.td_csw]
-    shr edx, 28
-    cmp edx, 0x0f
-    je .wait_read3
-
-    cmp edx, 0
-    jne .error
-
-    ; mov edi, 0x7777
-    ; cli
-    ; hlt
     popa
     clc
     ret
 
 .error:
+    mov byte [init_ohci_port.td_csw+17], 0
     popa
     stc
     ret
+
 usb_write_sectors:
-    ;AH = sector count
+    ;AX = sectors 
+    ;BL = USB address
     ;ECX = LBA
     ;ESI = Buffer
+
     pusha
+
+    mov edx, [max_lba]
+    dec edx
+    cmp ecx, edx
+    jae .error
+
+    cmp ax, 0
+    je .error
+
+.loop:
+    hlt
+    cmp byte [init_ohci_port.td_csw+17], 1
+    je .loop
+
+    mov byte [init_ohci_port.td_csw+17], 1
+
+    mov [.sectors], ax
+    cmp ax, 4
+    jbe .write_loop
+
+    mov ax, 4
+.write_loop:
+    push ax
+    mov ah, 0x08
+    int 0x35
+    mov [init_ohci_port.td_csw+18], ax      ;store current PID
+    pop ax
+
+    push ebx
+    movzx edx, ax
+
+    imul edx, 512
+    push edx
+    mov ebx, edx
+    xor edx, edx
+    add ebx, [block_size]
+    dec ebx
+    mov eax, ebx
+    mov ebx, [block_size]
+    div ebx
+    mov ebx, eax
+
+    mov eax, [ohci_base]
+    pop edx
+
+    ;convert ECX into big endian
+    push edx
+    mov dx, cx
+    xchg dl, dh
+    shl edx, 16
+    shr ecx, 16
+    mov dx, cx
+    xchg dl, dh
+    mov ecx, edx
+    pop edx
+
+    mov ebp, edx
+
+    mov [init_ohci_port.cbw_buffer+8], edx
+    mov byte [init_ohci_port.cbw_buffer+12], 0
+    mov byte [init_ohci_port.cbw_buffer+13], 0
+    mov byte [init_ohci_port.cbw_buffer+14], 10
+    mov byte [init_ohci_port.cbw_buffer+15], 0x2A ;WRITE(10)
+    mov [init_ohci_port.cbw_buffer+17], ecx
+    mov byte [init_ohci_port.cbw_buffer+21], 0
+    xchg bl, bh                                   ;convert to Big Endian
+    mov [init_ohci_port.cbw_buffer+22], bx
+    pop ebx
+
+    mov edi, init_ohci_port.td_cbw
+    mov dword [edi], 0
+    or dword [edi], (1 << 19)   ;OUT
+    or dword [edi], (7 << 21)   ;no interrupt
+    or dword [edi], (0xf << 28)    ;not accessed
+
+    mov edx, init_ohci_port.cbw_buffer
+    mov [edi+4], edx
+    mov edx, td_data
+    mov [edi+8], edx
+    mov edx, init_ohci_port.cbw_buffer+30
+    mov [edi+12], edx
+
+    ;fill data TD
+    mov edi, td_data
+    mov dword [edi], 0
+    or dword [edi], (0xf << 28)
+    or dword [edi], (7 << 21)
+    or dword [edi], (1 << 19)        ;OUT
+
+    mov [edi+4], esi
+    mov edx, esi
+    add edx, ebp
+    dec edx
+    mov [edi+12], edx
+
+    ;fill CSW TD
+    mov edi, init_ohci_port.td_csw
+    mov dword [edi], 0          ;clear old bits
+    or dword [edi], (2 << 19)   ;IN
+    ;or dword [edi], (1 << 24)   ;DATA1
+    or dword [edi], (0xf << 28)
+
+    mov edx, init_ohci_port.csw_buffer
+    mov dword [edx], 0
+    mov dword [edx+4], 0
+    mov dword [edx+8], 0
+
+    mov [edi+4], edx
+    mov edx, init_ohci_port.csw_buffer+12
+    mov [edi+12], edx
+
+    mov dword  [bulk_out_ed+4], td_empty
+    mov dword [bulk_out_ed+8], init_ohci_port.td_cbw
+    mov dword [bulk_out_ed+12], bulk_in_ed
+
+    ;connect TDs to send command once
+    mov dword [td_data+8], td_empty
+    mov dword [init_ohci_port.td_csw+8], td_empty
+
+    mov dword [bulk_in_ed+4], td_empty
+    mov dword [bulk_in_ed+8], init_ohci_port.td_csw
+    mov dword [bulk_in_ed+12], 0
+
+    mov dword [eax+0x28], bulk_out_ed
+    or dword [eax+8], 4
+
+    ;set task state to 'sleeping'
+    cli
+    mov ah, 0x07
+    mov al, 1
+    int 0x35
+    sti
+    int 0x20
+
+    cmp byte [init_ohci_port.td_csw+17], 2
+    je .error
+
+    ;increase buffer address
+    add esi, ebp
+
+    ;convert ECX into back to little endian
+    push edx
+    mov dx, cx
+    xchg dl, dh
+    shl edx, 16
+    shr ecx, 16
+    mov dx, cx
+    xchg dl, dh
+    mov ecx, edx
+    pop edx
+
+    ;calculate number of saved sectors
+    push ebx
+    xor edx, edx
+    mov eax, ebp
+    mov ebx, 512
+    div ebx
+    pop ebx
+
+    add ecx, eax
+
+    sub word [.sectors], ax
+    mov ax, [.sectors]
+    cmp ax, 0
+    je .done
+
+    cmp ax, 4
+    jbe .write_loop
+    mov ax, 4
+    jmp .write_loop
+
+.done:
+    mov byte [init_ohci_port.td_csw+17], 0
     popa
+    clc
     ret
+
+.error:
+    mov byte [init_ohci_port.td_csw+17], 0
+    popa
+    stc
+    ret
+.sectors: dw 0

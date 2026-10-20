@@ -159,8 +159,6 @@ init_mouse:
     pop ebx
     pop eax
 
-    pop eax
-
     mov al, 0xae
     out 0x64, al
     stc

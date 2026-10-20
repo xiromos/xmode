@@ -16,6 +16,7 @@
 ;AH = 0x0C: rename file in not-root directory               input: ESI = old file name, EDI = new file name, EDX = pointer to directory, BL = drive number      output: CF if error
 ;AH = 0x0D: delete file from not-root directory             input: ESI = file name, EDI = pointer to directory, BL = drive number   output: CF if error
 ;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3), output: CL = drive number
+;AH = 0x21: get current drive number                        output: AL = drive number
 ; Drive Numbers:
 ;     0 = First Floppy
 ;     1 = Second Floppy
@@ -142,6 +143,8 @@ fs16_handler:
     je fs16_delete_file2
     cmp ah, 0x20
     je fs16_change_drive
+    cmp ah, 0x21
+    je fs16_get_drive_number
     or dword [esp+8], 1
     iret
  
@@ -1490,3 +1493,11 @@ fs16_write_root2:
     popa
     stc
     ret
+
+;############################################################
+;############### GET CURRENT DRIVE NUMBER ###################
+;############################################################
+
+fs16_get_drive_number:
+    mov al, [drive_number]
+    iret
