@@ -361,15 +361,15 @@ main:
     call search_boot_device
     call get_bpb_data
 
-    mov dl, 6
-    mov dh, 0x0b
-    xor ecx, ecx
-    mov edi, 0x5000
-    mov ax, 1
-    call read_drive
+    ; mov dl, 6
+    ; mov dh, 0x0b
+    ; xor ecx, ecx
+    ; mov edi, 0x5000
+    ; mov ax, 1
+    ; call read_drive
 
-    cli
-    hlt
+    ; cli
+    ; hlt
 
     ; mov dl, 6
     ; mov dh, 0x0b
