@@ -1664,7 +1664,14 @@ write_ahci:
 ; 16 BYTES: Product name
 ; DWORD 2: max. LBA
 ; DWORD 3: block size
+; BYTE 3: IN Endpoint
+; BYTE 4: OUT Endpoint
+; BYTE 5: data toggle state for IN endpoint
+; BYTE 6: data toggle state for OUT endpoint
+; BYTE 7: protocol
+; BYTE 8: port number
 ; 40 BYTES: MBR partition information
+
 ide_init:
     pusha
     ; PCI
@@ -2007,8 +2014,136 @@ identify_ata:
 
 
 
+get_drive_list:
+    ;EDI = pointer to 3584B buffer
+    ;Output: AL = number of drives
+    push esi
+    push ecx
+    push edi
+    push edx
+
+    mov esi, DRIVE_LIST_ADDR
+    xor ax, ax
+    mov ecx, 128
+.loop:
+    cmp byte [esi+9], 0
+    je .next
+
+    cmp byte [esi+9], 0xaa
+    je .ahci
+    cmp byte [esi+9], 0xde
+    je .ide
+    cmp byte [esi+9], 0xbe
+    je .usb
+    cmp byte [esi+9], 0xfd
+    je .floppy
+    jmp .next
+
+.ahci:
+    mov dl, ah
+    add dl, 0x41
+    mov [edi], dl
+    mov byte [edi+1], 0xaa
+    mov edx, [esi+14]
+    mov [edi+2], edx
+    mov edx, [esi+18]
+    mov [edi+6], edx
+    mov edx, [esi+22]
+    mov [edi+10], edx
+    add edi, 14
+    inc al
+    jmp .next
+.ide:
+    mov dl, ah
+    add dl, 0x41
+    mov [edi], dl
+    mov byte [edi+1], 0xde
+    mov edx, [esi+11]
+    mov [edi+2], edx
+    mov edx, [esi+15]
+    mov [edi+6], edx
+    mov edx, [esi+19]
+    mov [edi+10], edx
+    add edi, 14
+    inc al
+    jmp .next
+.usb:
+    mov dl, ah
+    add dl, 0x41
+    mov [edi], dl
+    mov byte [edi+1], 0xbe
+    mov edx, [esi+32]
+    mov [edi+2], edx
+    mov dword [edi+6], 0
+    mov edx, [esi+36]
+    mov [edi+10], edx
+    add edi, 14
+    inc al
+    jmp .next
+.floppy:
+    mov dl, ah
+    add dl, 0x41
+    mov [edi], dl
+    mov byte [edi+1], 0xfd
+    mov dword [edi+2], 2880
+    mov dword [edi+6], 0
+    mov dword [edi+10], 512
+    add edi, 14
+    inc al
+.next:
+    inc ah
+    add esi, DRIVE_LIST_ENTRY
+    dec ecx
+    jnz .loop
+
+    pop edx
+    pop edi
+    pop ecx
+    pop esi
+    ret
 get_drive_information:
     ;DL = Drive Number
+    ;Output: EAX = low LBA, EBX = high LBA, ECX = size of one block (sector), EDX = zero, ESI = zero, EDI = zero, EBP (bits 0 - 7) = drive type, CF if error
+    movzx esi, dl
+    imul esi, DRIVE_LIST_ENTRY
+    add esi, DRIVE_LIST_ADDR
+
+    cmp byte [esi+9], 0xaa
+    je .ahci
+    cmp byte [esi+9], 0xde     ;IDE
+    je .ide
+    cmp byte [esi+9], 0xbe
+    je .usb
+    cmp byte [esi+9], 0xfd
+    je .floppy
+
+    stc
+    ret
+.ahci:
+    mov eax, [esi+14]
+    mov ebx, [esi+18]
+    mov ecx, [esi+22]
+    movzx ebp, byte [esi+9]
+    jmp .done
+.ide:
+    mov eax, [esi+11]
+    mov ebx, [esi+15]
+    mov ecx, [esi+19]
+    jmp .done
+.usb:
+    mov eax, [esi+32]
+    xor ebx, ebx
+    mov ecx, [esi+36]
+    jmp .done
+.floppy:
+    mov eax, 2880
+    mov ebx, 512
+    movzx ebp, byte [esi+9]
+.done:
+    xor edx, edx
+    xor esi, esi
+    xor edi, edi
+    clc
     ret
 read_drive:
 ;=========================================
@@ -2129,8 +2264,48 @@ read_drive:
     jmp .done
 .uhci:
     pop ax
+    cmp dh, 0x0b
+    je .uhci_write
+
+    mov ecx, [ecx]
+.uhci_write:
+    mov bx, ax
+    mov al, [esi+40]
+    mov ah, [esi+41]
+    shl eax, 16
+    mov ax, bx
+
+    mov bl, [esi+42]
+    mov bh, [esi+43]
+    shl ebx, 16
+    mov bl, [esi+44]
+    mov bh, [esi+10]
+
+    cli
+    mov ebp, .uhci_structure
+    push eax
+    mov eax, [esi+12]
+    mov [ebp], ax
+    mov eax, [esi+36]
+    mov [ebp+2], eax
+    mov eax, [esi+32]
+    mov [ebp+6], eax
+    mov al, [esi+45]
+    mov [ebp+10], al
+    pop eax
+
+    push esi
+    mov esi, ebp
+    mov edx, [uhci_kernel_packet]
+    call dword [edx+4]
+    pop esi
+
+    mov [esi+42], bl
+    mov [esi+43], bh
+    sti
+
     jc .error
-    jmp .error
+    jmp .done
 .ehci:
     pop ax
     jc .error
@@ -2156,6 +2331,9 @@ read_drive:
     clc
     ret
 
+; ## data ##
+.uhci_structure: times 15 db 0
+; ##########
 
 write_drive:
     ;DL = Drive Number
@@ -2269,8 +2447,47 @@ write_drive:
     jmp .done
 .uhci:
     pop ax
+    cmp dh, 0x0b
+    je .uhci_write
+
+    mov ecx, [ecx]
+.uhci_write:
+    mov bx, ax
+    mov al, [esi+40]
+    mov ah, [esi+41]
+    shl eax, 16
+    mov ax, bx
+
+    mov bl, [esi+42]
+    mov bh, [esi+43]
+    shl ebx, 16
+    mov bl, [esi+44]
+    mov bh, [esi+10]
+
+    cli
+    mov ebp, read_drive.uhci_structure
+    push eax
+    mov eax, [esi+12]
+    mov [ebp], ax
+    mov eax, [esi+36]
+    mov [ebp+2], eax
+    mov eax, [esi+32]
+    mov [ebp+6], eax
+    mov al, [esi+45]
+    mov [ebp+10], al
+    pop eax
+
+    push esi
+    mov esi, ebp
+    mov edx, [uhci_kernel_packet]
+    call dword [edx+8]
+    pop esi
+
+    mov [esi+42], bl
+    mov [esi+43], bh
+    sti
     jc .error
-    jmp .error
+    jmp .done
 .ehci:
     pop ax
     jc .error
