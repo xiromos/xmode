@@ -23,6 +23,13 @@ get_command:
     push ax
     call delete_cursor
     pop ax
+
+    xor bl, bl
+    cmp ah, KEY_UP
+    je .history
+    cmp ah, KEY_DOWN
+    je .history_down
+
     cmp al, 0x08
     je .handle_backspace
     cmp al, 0x0d
@@ -53,7 +60,166 @@ get_command:
     jmp .loop
 .done:
     mov byte [edi], 0
+
+    cmp byte [command_buffer], 0
+    je .skip1
+    cmp byte [command_buffer], 0x20
+    je .skip1
+    call .history_save
+.skip1:
+    mov word [.cur_hstry_string], 0
+    mov byte [.down_first], 0
     ret
+
+.history_down:
+    cmp word [.cur_hstry_string], 0
+    je .loop
+
+    cmp ecx, 50
+    jae .hstry_skip2
+
+    mov al, 0x08            ;backspace
+    call print_char
+    mov al, 0xff            ;same as ' '
+    call print_char
+    mov al, 0x08
+    call print_char
+
+    inc ecx
+    jmp .history_down
+.hstry_skip2:
+    mov bl, 1
+    dec word [.cur_hstry_string]
+    cmp word [.cur_hstry_string], 0xffff
+    jne .hstry_check_down
+
+.hstry_skip3:
+    inc word [.cur_hstry_string]
+    mov edi, command_buffer
+    mov ecx, 50
+    mov byte [edi], 0
+    jmp .loop
+.hstry_check_down:
+    cmp byte [.down_first], 0
+    jne .hstry_skip
+    mov byte [.down_first], 1
+    dec word [.cur_hstry_string]
+    cmp word [.cur_hstry_string], 0xffff
+    je .hstry_skip3
+    jmp .hstry_skip
+
+.history:
+    cmp byte [.history_top], 0
+    je .loop
+    mov ax, [.history_top]
+    cmp word [.cur_hstry_string], ax
+    jae .loop
+    mov byte [.down_first], 0
+
+    cmp ecx, 50
+    jae .hstry_skip
+
+    mov al, 0x08            ;backspace
+    call print_char
+    mov al, 0xff            ;same as ' '
+    call print_char
+    mov al, 0x08
+    call print_char
+
+    inc ecx
+    jmp .history
+.hstry_skip:
+    movzx esi, word [.history_top]
+    dec esi
+    imul esi, HISTORY_ENTRY_SIZE
+    add esi, dword [.history_buffer]
+
+    movzx ecx, word [.cur_hstry_string]
+    imul ecx, HISTORY_ENTRY_SIZE
+    sub esi, ecx
+
+    push ebx
+    mov ecx, HISTORY_ENTRY_SIZE-1
+    mov edi, command_buffer
+    mov ebx, 50
+.hstry_loop:
+    lodsb
+    cmp al, 0
+    je .hstry_done
+    stosb
+    dec ecx
+    dec ebx
+    jnz .hstry_loop
+.hstry_done:
+    mov byte [edi], 0
+    mov edx, ebx
+
+    push edi
+    push edx
+    mov esi, command_buffer
+    mov ebx, 0x00ffffff
+    call print_string
+    pop edx
+    pop edi
+    pop ebx
+
+    mov ecx, edx
+
+    mov ax, [.history_top]
+    cmp word [.cur_hstry_string], ax
+    jae .loop
+    cmp bl, 1
+    je .loop
+    inc word [.cur_hstry_string]
+    jmp .loop
+
+.history_save:
+    push edi
+    push esi
+    push ecx
+    push eax
+
+    cmp word [.history_top], MAX_HISTORY_ENTRIES
+    jb .his_ok
+
+    mov word [.history_top], MAX_HISTORY_ENTRIES-1
+    mov esi, [.history_buffer]
+    mov edi, esi
+    add esi, HISTORY_ENTRY_SIZE
+
+    mov ecx, MAX_HISTORY_ENTRIES
+    imul ecx, HISTORY_ENTRY_SIZE
+    sub ecx, HISTORY_ENTRY_SIZE
+
+    rep movsb
+    
+.his_ok:
+    movzx edi, word [.history_top]
+    imul edi, HISTORY_ENTRY_SIZE
+    add edi, dword [.history_buffer]
+
+    mov esi, command_buffer
+    mov ecx, 50
+.his_loop:
+    lodsb
+    cmp al, 0
+    je .hstry_save_done
+    stosb
+    dec ecx
+    jnz .his_loop
+.hstry_save_done:
+    mov byte [edi], 0
+    inc word [.history_top]
+
+    pop eax
+    pop ecx
+    pop esi
+    pop edi
+    ret
+.history_buffer: dd 0xfffff000
+.history_top: dw 0
+.cur_hstry_string: dw 0
+.down_first: db 0
 
 print_cursor:
     mov al, '_'
@@ -173,6 +339,16 @@ exec_cmd:
     mov esi, dhcp_str
     call cmp_str
     jc .init_dhcp
+
+    mov edi, command_buffer
+    mov esi, time_str
+    call cmp_str
+    jc .show_time
+
+    mov edi, command_buffer
+    mov esi, history_str
+    call cmp_str
+    jc show_history
 
     jmp .exec_program
     ret
@@ -301,7 +477,7 @@ exec_cmd:
 ;     mov ah, 0x0a
 ;     mov edx, edi
 ;     add edi, 0x500
-;     mov esi, file_bgcolor_cfg
+;     mov esi, file_color_cfg
 ;     mov bl, [drive_number]
 ;     int 0x33
 ;     jc .bgcolor_error
@@ -337,7 +513,7 @@ exec_cmd:
 ;     movzx edi, word [.configs_cluster]
 ;     add esi, 0x500
 ;     mov edx, esi
-;     mov esi, file_bgcolor_cfg
+;     mov esi, file_color_cfg
 ;     mov bl, [drive_number]
 ;     int 0x33
 ;     jc .bgcolor_error
@@ -494,7 +670,7 @@ exec_cmd:
     ret
 
 .program_error_str: db 'Something went wrong while loading program (Filesystem error or maximum tasks reached)', 0x0a, 0
-.program_coff_error_str: db 'Error while relocating COFF file, are you sure this is a COFF Objekt file?', 0x0a, 0
+.program_coff_error_str: db 'Error while relocating COFF file', 0x0a, 0
 .exec_prog_err:
     ret
 
@@ -516,6 +692,40 @@ exec_cmd:
     call clear_screen
     ret
 
+.show_time:
+    mov ah, 0x22
+    mov al, 3
+    int 0x35
+
+    push eax
+
+    movzx eax, bl
+    call print_dec
+
+    push ebx
+    mov al, ':'
+    mov ebx, 0xffffff
+    call print_char
+    pop ebx
+
+    pop eax
+    push eax
+
+    movzx eax, ah
+    call print_dec
+
+    push ebx
+    mov al, ':'
+    mov ebx, 0xffffff
+    call print_char
+    pop ebx
+
+    pop eax
+    movzx eax, al
+    call print_dec
+
+    call print_newline
+    ret
 .list_files:
     mov ah, 0x01
     mov edi, file_buffer
@@ -888,7 +1098,7 @@ hex_string_done:
 
 print_hex8:
     pusha
-    mov ecx, 8       ;counter to print 4 chars !!!!change it to print less or more chars!!!!
+    mov ecx, 8       ;print 8 chars
 .char_loop:
     dec ecx
 
@@ -1068,7 +1278,7 @@ get_text:
 
 .handle_backspace:
     cmp ecx, 0
-    jbe .loop
+    je .loop
     cmp dword [cur_x], 0
     je .loop
     sub dword [cur_x], 8
@@ -1453,6 +1663,8 @@ list_drives:
     je .ide
     cmp byte [esi+9], 0xbe
     je .usb
+    cmp byte [esi+9], 0xfd
+    je .floppy
     
     mov esi, unknown_drive_str
     mov ebx, 0x00ffffff
@@ -1603,6 +1815,14 @@ list_drives:
 .atapi_str: db 'CD / DVD (ATAPI Device)', 0
 .model_name_str: db '   Model name: ', 0
 .serial_number_str: db '   Serial number: ', 0
+.fd_drive_str: db 'Floppy Disk Drive', 0x0a,
+               db '   Type: ', 0
+.unknown_type: db 'Unknown Type', 0x0a, 0
+.flp1_str: db '360 KB 5.25 Drive', 0x0a, 0
+.flp2_str: db '1.2 MB 5.25 Drive', 0x0a, 0
+.flp3_str: db '720 KB 3.5 Drive', 0x0a, 0
+.flp4_str: db '1.44 MB 3.5 Drive', 0x0a, 0
+.flp5_str: db '2.88 MB 3.5 drive', 0x0a, 0
 
 .atapi:
     mov esi, .atapi_str
@@ -1613,7 +1833,7 @@ list_drives:
     pop eax
     pop esi
     jmp .continue
-    ret
+
 .usb:
     push ecx
     push esi
@@ -1661,6 +1881,54 @@ list_drives:
     pop esi
     jmp .continue
 
+.floppy:
+    push esi
+    mov esi, .fd_drive_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop esi
+
+    mov al, [esi+8]
+    cmp al, 1
+    je .floppy1
+    cmp al, 2
+    je .floppy2
+    cmp al, 3
+    je .floppy3
+    cmp al, 4
+    je .floppy4
+    cmp al, 5
+    je .floppy5
+
+    mov esi, .unknown_type
+    call print_string
+    jmp .flp_done
+
+.floppy1:
+    mov esi, .flp1_str
+    call print_string
+    jmp .flp_done
+.floppy2:
+    mov esi, .flp2_str
+    call print_string
+    jmp .flp_done
+.floppy3:
+    mov esi, .flp3_str
+    call print_string
+    jmp .flp_done
+.floppy4:
+    mov esi, .flp4_str
+    call print_string
+    jmp .flp_done
+.floppy5:
+    mov esi, .flp5_str
+    call print_string
+.flp_done:
+    call print_newline
+
+    pop eax
+    pop esi
+    jmp .continue
 
 .print_size:
     ;EAX: max. LBA
@@ -1765,6 +2033,7 @@ show_usb_devices:
     cmp dx, 0
     je .done
 .loop:
+    push edx
     lodsb
     cmp al, 0
     je .unknown
@@ -1785,9 +2054,13 @@ show_usb_devices:
     cmp al, 0xff
     je .error
 
+    pop edx
     cmp al, 0xee
     je .done
+    push edx
 .next:
+    pop edx
+
     inc cl
     add esi, USB_LIST_ENTRY-1
     dec dx
@@ -1796,40 +2069,40 @@ show_usb_devices:
 
 .unknown:
     push esi
-    movzx eax, cl
-    call print_dec
-    mov al, ':'
-    call print_char
-    mov al, 0x20
-    call print_char
+    call .print_number
+    mov dl, [esi+1]
 
     mov esi, usb_unknown_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .keyboard:
     push esi
-    movzx eax, cl
-    call print_dec
-    mov al, ':'
-    call print_char
-    mov al, 0x20
-    call print_char
+    call .print_number
 
+    mov dl, [esi+1]
     mov esi, usb_keyboard_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .mouse:
-    push esi
+    call .print_number
+    mov dl, [esi+1]
+
     mov esi, usb_mouse_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+    
+    call .print_type
     pop esi
     jmp .next
 .usb_stick:
@@ -1847,8 +2120,10 @@ show_usb_devices:
     mov ebx, 0x00ffffff
     call print_string
 
-    mov ebp, [edi+24]       ;LBA
-    mov edx, [edi+28]       ;block size
+    mov dl, [edi+1]
+    push edx
+    mov ebp, [edi+26]       ;LBA
+    mov edx, [edi+30]       ;block size
     
     push ebp
     push edx
@@ -1858,6 +2133,7 @@ show_usb_devices:
     call print_string
 
     mov esi, edi
+    add esi, 2
     mov ecx, 8
     call print_buffer
 
@@ -1866,7 +2142,7 @@ show_usb_devices:
     call print_string
 
     mov esi, edi
-    add esi, 8
+    add esi, 10
     mov ecx, 16
     mov ebx, 0x00ffffff
     call print_buffer
@@ -1899,6 +2175,9 @@ show_usb_devices:
     call print_char
 
     call print_newline
+    pop edx
+    call .print_type
+
     pop esi
     pop edx
     jmp .next
@@ -1906,56 +2185,126 @@ show_usb_devices:
 .usb_productname_str: db '   Product name: ', 0
 .usb_capacity_str: db '   Capacity: ', 0
 .usb_blocksize_str: db '   Size of one block: ', 0
+.type_str: db '   Type: ', 0
+.unknown_str: db 'Unknown', 0
+.ohci_str: db 'OHCI', 0
+.uhci_str: db 'UHCI', 0
+.ehci_str: db 'EHCI', 0
+.xhci_str: db 'XHCI', 0
+
 .floppy:
     push esi
+    call .print_number
+    mov dl, [esi+1]
+
     mov esi, usb_floppy_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .printer:
     push esi
+    call .print_number
+    mov dl, [esi+1]
+
     mov esi, usb_printer_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .usb_hub:
     push esi
+    call .print_number
+    mov dl, [esi+1]
+
     mov esi, usb_hub_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .external_drive:
     push esi
+    call .print_number
+    mov dl, [esi+1]
+
     mov esi, usb_extdrive_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    call .print_type
     pop esi
     jmp .next
 .error:
     push esi
+    call .print_number
+    mov dl, [esi+1]
+
+    mov esi, usb_error_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    call .print_type
+    pop esi
+    jmp .next
+.done:
+    popa
+    ret
+
+.print_number:
     movzx eax, cl
     call print_dec
     mov al, ':'
     call print_char
     mov al, 0x20
     call print_char
+    ret
 
-    mov esi, usb_error_str
+.print_type:
+    ;DL = 0x10 / 0x15 / 0x20 / 0x30
+
+    mov esi, .type_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    cmp dl, 0x10
+    je .type_ohci
+    cmp dl, 0x15
+    je .type_uhci
+    cmp dl, 0x20
+    je .type_ehci
+    cmp dl, 0x30
+    je .type_xhci
+
+    mov esi, .unknown_str
+.type_done:
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
-    pop esi
-    jmp .next
-.done:
-    popa
     ret
+
+.type_ohci:
+    mov esi, .ohci_str
+    jmp .type_done
+.type_uhci:
+    mov esi, .uhci_str
+    jmp .type_done
+.type_ehci:
+    mov esi, .ehci_str
+    jmp .type_done
+.type_xhci:
+    mov esi, .xhci_str
+    jmp .type_done
 
 cd_directory:
     mov esi, [argument]
@@ -2154,6 +2503,34 @@ get_dir_name:
     pop edi
     pop eax
     pop esi
+    ret
+
+show_history:
+    mov esi, [get_command.history_buffer]
+    mov ecx, MAX_HISTORY_ENTRIES
+    mov eax, 1
+.loop:
+    cmp byte [esi], 0
+    je .done
+    mov ebx, 0x00ffffff
+    call print_dec
+    push eax
+    mov al, ':'
+    call print_char
+    mov al, ' '
+    call print_char
+    mov ebx, 0x00ffffff
+    push esi
+    call print_string
+    pop esi
+    pop eax
+    call print_newline
+    inc eax
+    add esi, HISTORY_ENTRY_SIZE
+    dec ecx
+    jnz .loop
+
+.done:
     ret
 
 show_memory_info:
