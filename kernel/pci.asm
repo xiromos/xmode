@@ -194,8 +194,9 @@ scan_disk_pci:
 ;##################################### UHCI ###########################################
 ;######################################################################################
 .uhci:
-    cmp byte [uhci_found], 1
-    je .next_device
+    cmp byte [uhci_found], 4
+    jae .next_device
+    inc byte [uhci_found]
 
     call get_pci_addr
 
@@ -210,12 +211,19 @@ scan_disk_pci:
     mov ebx, eax
     and bx, 0xfdff
 
+    or ebx, (1 << 0) | (1 << 1) | (1 << 2)
+
     mov eax, ecx
     add eax, 4
     call pci_write
 
     cmp dword [UHCI_ADDR], 'FAIL'
-    je .skip_uhci
+    je .next_device
+
+    mov eax, ecx
+    add eax, 0xc0
+    mov ebx, 0x2000
+    call pci_write
 
     mov eax, ecx
     add eax, 0x3c
@@ -228,15 +236,118 @@ scan_disk_pci:
     push ecx
     call load_coff_obj
     pop ecx
-    jc .skip_uhci
+    jc .next_device
 
     mov eax, [uhci_base]
+    mov edx, uhci_packet
+    mov dword [edx], usb_set_keys
+    mov dword [edx+4], usb_add_device
+    mov dword [edx+8], usb_remove_device
+
     push ecx
     call edi
     pop ecx
 
-.skip_uhci:
-    mov byte [uhci_found], 1
+    mov eax, [edx]
+    mov ebx, ecx
+    call set_irq
+
+    mov [uhci_kernel_packet], edx
+
+    mov edi, USB_DEVICE_LIST
+    xor ebp, ebp
+    xor bl, bl
+    mov ecx, USB_LIST_MAX
+.uhci_loop:
+    cmp dword [edi], 0
+    jne .uhci_next
+
+    cmp ebp, 1
+    je .uhci_scnd
+
+    cmp byte [edx+41], 0
+    je .uhci_scnd
+    test byte [edx+32], (1 << 2)
+    jz .uhci_scnd
+    inc byte [usb_devices]
+
+    mov esi, [uhci_base]
+    xor bh, bh
+    call dword [edx+16]
+
+    movzx eax, byte [edx+41]
+    mov [edi], eax      ;device type
+    mov bh, al
+    mov byte [edi+2], 0x15  ;HCI: UHCI
+    mov al, [edx+32]
+    mov [edi+4], al     ;port information
+    mov al, [edx+38]
+    mov [edi+5], al     ;Interface Class
+    mov al, [edx+39]
+    mov [edi+6], al     ;Subclass
+    mov al, [edx+40]
+    mov [edi+7], al     ;Protocol
+
+    mov esi, .uhci_next
+    mov ebp, 1
+
+    cmp bh, 1
+    je .uhci_keyboard_used
+    cmp bh, 0x0a
+    je .uhci_keyboard_used
+
+    mov al, bh
+    mov esi, edx
+    add esi, 32
+    call usb_save_buffer_uhci
+
+    jmp .uhci_next
+.uhci_scnd:
+    cmp byte [edx+73], 0
+    je .next_device
+    test byte [edx+32], (1 << 2)
+    jz .next_device
+    inc byte [usb_devices]
+
+    mov esi, [uhci_base]
+    mov bh, 1
+    call dword [edx+16]
+
+    movzx eax, byte [edx+73]
+    mov [edi], eax      ;device type
+    mov bh, al
+    mov byte [edi+2], 0x15  ;HCI: UHCI
+    mov al, [edx+64]
+    mov [edi+4], al     ;port information
+    mov al, [edx+70]
+    mov [edi+5], al     ;Interface Class
+    mov al, [edx+71]
+    mov [edi+6], al     ;Subclass
+    mov al, [edx+72]
+    mov [edi+7], al     ;Protocol
+
+    mov esi, .next_device
+
+    cmp bh, 1
+    je .uhci_keyboard_used
+    cmp bh, 0x0a
+    je .uhci_keyboard_used
+
+    mov al, bh
+    mov esi, edx
+    add esi, 64
+    call usb_save_buffer_uhci
+
+    jmp .next_device
+.uhci_keyboard_used:
+    mov byte [usb_keyboard_used], 1
+    jmp esi
+
+.uhci_next:
+    inc bl
+    add edi, USB_LIST_ENTRY
+    dec ecx
+    jnz .uhci_loop
     jmp .next_device
 
 ;######################################################################################
@@ -293,7 +404,7 @@ scan_disk_pci:
     je .skip_ohci
 
     mov [ohci_kernel_packet], edx
-    mov [usb_devices], ah
+    add byte [usb_devices], ah
 
     mov [usb_keybuffer], ebx
 
@@ -1229,3 +1340,11 @@ ohci_base: dd 0
 uhci_base: dd 0
 ehci_base: dd 0
 xhci_base: dd 0
+
+uhci_packet:
+    dd 0    ;usb_set_keys()
+    dd 0    ;usb_add_device()
+    dd 0    ;usb_remove_device()
+
+ehci_packet: times 3 dd 0
+xhci_packet: times 3 dd 0
