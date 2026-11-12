@@ -80,7 +80,25 @@ scan_codes:
     db KEY_F11                  ; 0x57
     db KEY_F12                  ; 0x58
     
-    times (128 - 0x58) db KEY_NONE
+    times (128 - ($ - .keycode_table)) db KEY_NONE
+.extended:
+    times 0x47 db KEY_NONE
+
+    db KEY_HOME                 ; 0x47
+    db KEY_UP                   ; 0x48
+    db KEY_PAGEUP               ; 0x49
+    db KEY_NONE                 ; 0x4A
+    db KEY_LEFT                 ; 0x4B
+    db KEY_NONE                 ; 0x4C
+    db KEY_RIGHT                ; 0x4D
+    db KEY_NONE                 ; 0x4E
+    db KEY_END                  ; 0x4F
+    db KEY_DOWN                 ; 0x50
+    db KEY_PAGEDOWN             ; 0x51
+    db KEY_INSERT               ; 0x52
+    db KEY_DELETE               ; 0x53
+
+    times (128 - ($ - .extended)) db KEY_NONE 
 keymap_shift:
     db 0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', 8
     db 9
@@ -108,7 +126,8 @@ keymap_shift:
     db '1','2','3','0'
     db '.'
 
-key_buffer: times 256 db 0
+    times 25 db 0
+
 buf_head:   dd 0
 buf_tail:   dd 0
 KEY_BUFFER      equ 0x50000
@@ -192,12 +211,17 @@ cd_str: db 'CD', 0
 meminfo_str: db 'MEMINFO', 0
 reboot_str: db 'REBOOT', 0
 dhcp_str: db 'DHCP', 0
+time_str: db 'TIME', 0
+history_str: db 'HISTORY', 0
+
 command_buffer: db 50 dup(0)
+MAX_HISTORY_ENTRIES     equ 32      ;4096 / (127 + 1 Null Byte) = 32    (used 127B for command length as buffer for later changes)
+HISTORY_ENTRY_SIZE      equ 128
+
 setbgcolor_helpmsg: db 'Set Background Color.', 0x0a,
                     db 'Usage: ', 0
 setbgcolor_helpmsg2: db 'bgcolor #abcdef', 0
 configs_load_err: db '> Error while applying config files. Loaded standard configs', 0
-cfg_load_err: db 'Couldnt load Font from Config Directory', 0
 ;disk
 fs_loading_str: db '> Loading FAT16...', 0
 disk_lba:           ;extended read/write needs a structure which points to the LBA
@@ -263,14 +287,49 @@ ide_device_str: db 'IDE Hard Disk', 0
 usb_storage_str: db 'USB Mass Storage Device', 0
 
 
-ohci_found: db 0
 ahci_found: db 0
 ide_found: db 0
 
+OHCI_ADDR       equ 0x61000
+UHCI_ADDR       equ 0x64000
+EHCI_ADDR       equ 0x6a000
+XHCI_ADDR       equ 0x6d000
+NVME_ADDR       equ 0x70000
+FDC_ADDR        equ 0x73000
+SDC_ADDR        equ 0x75000
 
-ohci_base: dd 0
+ohci_kernel_packet: dd 0
+;+0: usb_read_sectors()
+;+4: usb_write_sectors()
+
+uhci_kernel_packet: dd 0
+;+0: interrupt_handler()
+;+4: usb_read_sectors()
+;+8: usb_write_sectors()
+
+
+ehci_kernel_packet: dd 0
+xhci_kernel_packet: dd 0
+
+nvme_kernel_packet: dd 0
+fdc_kernel_packet: dd 0
+;+0: read_sectors()
+;+4: write_sectors()
+;+8: interrupt_handler()
+;+12: floppy type (A:)
+;+13: drive number (A:)
+;+14: floppy type (B:)
+;+15: drive number (B:)
+
+sdc_kernel_packet: dd 0
+
+network_kernel_packet: dd 0
+graphics_kernel_packet: dd 0
+sound_kernel_packet: dd 0
+
 hcca                    equ 0x162500              ;Host Controller Communications Area
 USB_DEVICE_LIST         equ 0x163000
+USB_LIST_MAX            equ 15
 OHCI_DRIVER_ADDR        equ 0x61000
 DIR_DRIVERS_ADDR        equ 0x60000
 ;0x00: Unknown
@@ -426,14 +485,30 @@ usb_keymap:
     db KEY_TAB                  ; 0x2B
     db KEY_SPACE                ; 0x2C
     
-    ; 0x2D - 0x39: special keys
-    times (0x3A - 0x2D) db KEY_NONE
+    ; 0x2D - 0x39
+    db KEY_MINUS, KEY_EQUAL, KEY_LBRACKET, KEY_RBRACKET, KEY_BACKSLASH
+    db KEY_NONE
+    db KEY_SEMICOLON, KEY_APOSTROPHE, KEY_GRAVE, KEY_COMMA, KEY_DOT, KEY_SLASH
+
+    db KEY_NONE     ;caps lock
     
     ; 0x3A - 0x45: function keys
     db KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6
     db KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12
 
-    times (256 - 0x45) db KEY_NONE
+    times 4 db 0
+
+    db KEY_HOME        ; 0x4A
+    db KEY_PAGEUP      ; 0x4B
+    db KEY_DELETE      ; 0x4C
+    db KEY_END         ; 0x4D
+    db KEY_PAGEDOWN    ; 0x4E
+    db KEY_RIGHT       ; 0x4F
+    db KEY_LEFT        ; 0x50
+    db KEY_DOWN        ; 0x51
+    db KEY_UP          ; 0x52
+
+    times (256 - ($ - .keycode_table)) db KEY_NONE
 
 ;###################################################################
 ;############################# KEY CODES ###########################
@@ -519,13 +594,20 @@ KEY_DOT         equ 0x43    ;.
 KEY_SLASH       equ 0x44
 KEY_LESS        equ 0x45    ;< / >
 
+KEY_INSERT      equ 0x49
+KEY_DELETE      equ 0x4C
+KEY_HOME        equ 0x4A
+KEY_END         equ 0x4D
+KEY_PAGEUP      equ 0x4B
+KEY_PAGEDOWN    equ 0x4E
+
+KEY_RIGHT       equ 0x4F
+KEY_LEFT        equ 0x50
+KEY_DOWN        equ 0x51
+KEY_UP          equ 0x52
+
 global_key_buffers: dd 0x1b1000
 ;###################################################################
-
-ohci_read_sectors: dd 0
-uhci_read_sectors: dd 0
-ehci_read_sectors: dd 0
-xhci_read_sectors: dd 0
 
 ide_running: db 0
 dma_done: db 0
@@ -547,6 +629,9 @@ root_sectors: dw 0
 data_start: dd 0
 subdir_entries: dw 0
 
+volume_label: db 'XIROMOS_X32'
+volume_id: dd 0xcafebabe
+
 root_addr       equ 0
 fat_addr        equ 0x4000
 dir_str: db '<DIR>', 0
@@ -559,7 +644,6 @@ cluster16: dw 0
 first_cluster16: dw 0
 file_size16: dd 0
 prev_cluster16: dw 0
-drive_number: db 0
 cur_dir_addr: dd 0
 
 no_file_msg: db 'No such file found', 0
@@ -588,7 +672,7 @@ shell_task_str db       "SHELL   SYS"
 program_init_sys db     "INIT    SYS"
 
 dir_configs_str db      "XCONFIGS   "
-file_bgcolor_cfg db     "BGCOLOR CFG"
+file_color_cfg db       "COLOR   CFG"
 dir_drivers_str db      "DRIVERS    "
 file_ohci_sys db        "OHCI    SYS"
 file_sb16_sys db        "SB16    SYS"
@@ -602,6 +686,7 @@ dot_dot_entry db        "..         "
 idle_task_str db        "IDLE    SYS"
 file_ps2mouse_sys db    "PS2MOUSESYS"
 file_mouse_bmp db       "MOUSE   BMP"
+file_mouse2_bmp db      "MOUSE2  BMP"
 file_drvrlist_txt db    "DRVRLISTTXT"
 file_default_fnt db     "DEFAULT FNT"
 
@@ -649,27 +734,38 @@ main_task: dw 1
 
 tasks_esp:
     times 11 db 0
-    times 4 dd 0    ;task 0 (reserved)
+    times 7 dd 0    ;task 0 (reserved)
 
     times 11 db 0
-    times 4 dd 0    ;task 1 (shell)
+    times 7 dd 0    ;task 1 (shell)
 
     times 11 db 0
-    times 4 dd 0    ;task 2
+    times 7 dd 0    ;task 2
 
     times 11 db 0
-    times 4 dd 0    ;task 3
+    times 7 dd 0    ;task 3
 
     times 11 db 0
-    times 4 dd 0    ;task 4
+    times 7 dd 0    ;task 4
 
     times 11 db 0
-    times 4 dd 0    ;4B Flags, 4B ESP, 4B Program start address, 4B program size
+    times 7 dd 0
+    ;DWORD: Flags
+    ;DWORD: ESP
+    ;DWORD: Program start address
+    ;DWORD: program size
+    ;DWORD: BSS address
+    ;DWORD: BSS size
+    ;BYTE: flags 2
+    ;WORD: parent task
+    ;BYTE: reserved
 
 tasks_kernel_stack      equ 0x90000
 tasks_kernel_stack_off  equ 0x1000      ;every task has ~4KB stack
-TASK_SIZE               equ 27
+TASK_SIZE               equ 39
 TASK_FLAG_SLEEPING      equ 0x0000b100  ;sleeping flag
+TASK_FLAG2_WIN          equ (1 << 0)    ;windowed task
+
 task_limit: db 'Maximum amount of tasks achieved!', 0
 create_task_err: db 'Error while creating task', 0
 
@@ -694,6 +790,7 @@ RELOCATION_TABLE_CONTENTS   equ 0xeffe00
 
 program_address: dd 0
 section_text_str: db '.text', 0, 0, 0
+section_bss_str: db '.bss', 0
 coff_load_err: db 'Error while loading COFF File', 0
 
 wavfile_functions: dd 0
