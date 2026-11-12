@@ -3,8 +3,11 @@
 ;Syscall for drawing and deleting a window
 ;AH = 0x1: draw a window                        ;input: ESI = X, EDI = Y, ECX = width, EDX = height, EBX = background color, EBP = pointer to title         output: EAX = window ID, EBX = CurX, ECX = CurY
 ;AH = 0x2: remove window                        ;input: EDI = window_packet, bx = window id
+;AH = 0x05: get screen geometry                 ;output: EAX = width, EBX = height, CL = bytes per pixel
 ;AH = 0x0A: draw a window but let the window manager control it (recommended)       input: EBX = foreground color (text color), ECX = background color, ESI = pointer to max. 17 byte string (or zero the register, then window is untitled)      output: EDI = pointer to window packet, AX = window ID
 ;AH = 0x0B: remove the window, drawn by the window manager                          input: BX = window ID, EDI = window packet
+;AH = 0x0E: change color and bgcolor in window packet                               input: BX = window ID, ECX = color, EDX = bgcolor, EDI = window packet
+;AH = 0x0F: redraw all windows
 
 bits 32
 
@@ -14,10 +17,16 @@ window_functions:
     je .draw_window
     cmp ah, 0x02
     je .rm_window
+    cmp ah, 0x05
+    je wndw_mngr_get_geometry
     cmp ah, 0x0a
     je wndw_mngr_draw_window
     cmp ah, 0x0b
     je wndw_mngr_rm_window
+    cmp ah, 0x0e
+    je wndw_mngr_change_color
+    cmp ah, 0x0f
+    je wndw_mngr_redraw_windows
     iret
 
 .draw_window:
@@ -375,7 +384,7 @@ wndw_mngr_draw_window:
 
     imul eax, ecx
     mov ecx, eax
-    shl ecx, 1      ;*2, because of UTF-16 characters
+    shl ecx, 1      ;*2, because of UTF-8 characters
     mov ah, 0x0a
     int 0x35
 
@@ -470,6 +479,10 @@ wndw_mngr_draw_window:
     cli
     mov [.win_packet], edx
     mov [.win_id], bp
+
+    mov ax, [current_task]
+    mov bl, TASK_FLAG2_WIN
+    call set_taskflag
 
     popa
     and dword [esp+8], 0xfffffffe
@@ -1118,6 +1131,37 @@ wndw_mngr_rm_window:
     sti
     call copy_back_window
     
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+
+
+wndw_mngr_redraw_windows:
+    iret
+
+wndw_mngr_get_geometry:
+    mov eax, [real_width]
+    mov ebx, [real_height]
+    mov cl, [bpp]
+    iret
+
+wndw_mngr_change_color:
+    pusha
+    movzx esi, bx
+    imul esi, WIN_BUFFERLIST_SIZE
+    add esi, win_buffers_list
+
+    mov ax, [current_task]
+    cmp [esi+12], ax
+    jne .error
+
+    mov [edi], ecx
+    mov [edi+4], edx
     popa
     and dword [esp+8], 0xfffffffe
     iret
