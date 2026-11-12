@@ -228,8 +228,8 @@ irq0_handler:
     push fs
     push gs
 
-    cmp word [task_count], 2
-    jb .done
+    ; cmp word [task_count], 2
+    ; jb .done
 
     movzx eax, word [current_task]
     imul eax, TASK_SIZE
@@ -398,6 +398,11 @@ irq1_handler:
     ret
 
 .insert:
+    cmp byte [.ext], 0
+    je .skip1
+
+    or al, (1 << 7)
+.skip1:
     mov [.keybuffer+ebx], al
     ret
 .lshift:
@@ -436,6 +441,11 @@ irq1_handler:
 
     mov ecx, 6
     mov ebx, 1
+
+    cmp byte [.ext], 0
+    je .search2
+
+    or al, (1 << 7)
 .search2:
     cmp byte [.keybuffer+ebx], al
     je .rm
@@ -510,7 +520,28 @@ keyboard_handler:
 
     push ebx
     mov dl, [edi]   ;modifier
-    movzx ebx, byte [edi+1]
+    ;movzx ebx, byte [edi+1]
+
+    push edi
+    push eax
+    push ecx
+
+    mov ecx, 6
+    inc edi
+    movzx ebx, byte [edi]
+.last_key:
+    inc edi
+    movzx eax, byte [edi]
+    cmp eax, 0
+    je .found_key
+
+    mov ebx, eax
+    dec ecx
+    jnz .last_key
+.found_key:
+    pop ecx
+    pop eax
+    pop edi
 
 .end:
     test dl, (1 << 1)       ;left shift
@@ -520,6 +551,15 @@ keyboard_handler:
 
     cmp byte [usb_keyboard_used], 1
     je .skip
+
+    test bl, (1 << 7)
+    jz .skip3
+
+    and bl, ~(1 << 7)
+    movzx eax, byte [scan_codes+ebx]
+    mov ah, [scan_codes.extended+ebx]
+    jmp .get_key_done
+.skip3:
     movzx eax, byte [scan_codes+ebx]
     mov ah, [scan_codes.keycode_table+ebx]
     jmp .get_key_done
@@ -527,17 +567,28 @@ keyboard_handler:
     movzx eax, byte [usb_keymap+ebx]
     mov ah, [usb_keymap.keycode_table+ebx]
     jmp .get_key_done
+
+
 .shift:
     cmp byte [usb_keyboard_used], 1
     je .shift_usb
-    movzx eax, byte [keymap_shift+ebx]
 
+    test bl, (1 << 7)
+    jz .skip4
+
+    and bl, ~(1 << 7)
+    movzx eax, byte [keymap_shift+ebx]
+    mov ah, [scan_codes.extended+ebx]
+    jmp .get_key_done
+
+.skip4:
+    movzx eax, byte [keymap_shift+ebx]
     mov ah, [scan_codes.keycode_table+ebx]
     jmp .get_key_done
 .shift_usb:
     movzx eax, byte [usb_keymap.shift+ebx]
-
     mov ah, [usb_keymap.keycode_table+ebx]
+
 .get_key_done:
     pop ebx
 
@@ -1261,6 +1312,13 @@ ps2_mouse_handler:
     jb .done
 
     mov al, [.status]
+    mov cl, al
+    and cl, (1 << 0)
+    mov [.left_pressed], cl
+    mov cl, al
+    and cl, (1 << 1)
+    shr cl, 1
+    mov [.right_pressed], cl
 
     movzx ecx, byte [.status+1]
     test al, (1 << 4)
@@ -1458,6 +1516,8 @@ ps2_mouse_handler:
 .index: db 0
 .m_cur_x: dd 0
 .m_cur_y: dd 0
+.left_pressed: db 0
+.right_pressed: db 0
 .mouse_bmp: dd 0xffffffff
 .mouse_border_bmp: dd 0xffffffff
 .cursor_color: dd 0x00ffffff
