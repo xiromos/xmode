@@ -7,9 +7,9 @@
 ; X AH = 0x04: rename a file                                input: ESI = old filename, EDI = new filename                   output: CF if error
 ; X AH = 0x05: delete a file                                input: ESI = filename                                           output: CF if error
 ;AH = 0x06: copy file from one dir to another dir           input: ESI = path to file, EDI = path to destination directory where to copy    output: CF if error
-;AH = 0x07: copy file to another disk
-; X AH = 0x08: load program into memory                     input: ESI = program name, EDI = address in memory              output: CF if error
-;AH = 0x09: format a drive / partition with FAT16           input: AL  = drive number, BL = partition number (0-3)          output: CF if error
+;AH = 0x07: copy file from current drive to another drive   input: ESI = path to file, EDI = path to destination dir ('/' means root dir, else = '/dirname/dir2/...), AL = destination drive number     ouput: CF if error
+; X AH = 0x08: load program into memory                     input: ESI = program name, EDI = address in memory                               output: CF if error
+;AH = 0x09: format a drive / partition                      input: AL  = drive number, BL = partition number (0-3), BH = filesystem          output: CF if error
 
 ;AH = 0x0A: load file from not-root directory               input: ESI = file name, EDI = address where to load, EDX = address from where to load (directory), BL = drive number       output: CF if error
 ;AH = 0x0B: save file from not-root directory               input: ESI = file name, EDI = where to save (address of loaded directory), EDX = address of file, ECX = file size, BL = drive number       output: CF if error
@@ -17,6 +17,9 @@
 ;AH = 0x0D: delete file from not-root directory             input: ESI = file name, EDI = pointer to directory, BL = drive number   output: CF if error
 ;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3), output: CL = drive number
 ;AH = 0x21: get current drive number                        output: AL = drive number
+;AH = 0x22: zero a drive, write fresh MBR to it, write a FAT16 boot partition to it          input: BX = partition size in sectors, DL = drive number              output: CF if error
+;AH = 0x23: get drive list                                  input: EDI = pointer to buffer, AL = max. number of drives to list (if AL = 0xff, then list all available drives)         output: filled buffer, AL = actual number of drives
+;           one entry in buffer: 1B = drive number ('C', 'D',...), 1B = drive type (0xaa, 0xde, 0xbe, 0xfd,...), 8B = maximum LBA, 4B = sector size
 ; Drive Numbers:
 ;     0 = First Floppy
 ;     1 = Second Floppy
@@ -129,6 +132,8 @@ fs16_handler:
     ; je fs16_delete_file
     cmp ah, 0x06
     je fs16_copy_file
+    cmp ah, 0x07
+    je fs16_copy_file_disk
     cmp ah, 0x08
     je fs16_load_program
     cmp ah, 0x09
@@ -145,6 +150,10 @@ fs16_handler:
     je fs16_change_drive
     cmp ah, 0x21
     je fs16_get_drive_number
+    cmp ah, 0x22
+    je fs16_zero_partition_drive
+    cmp ah, 0x23
+    je fs16_get_drive_list
     or dword [esp+8], 1
     iret
  
@@ -1500,4 +1509,273 @@ fs16_write_root2:
 
 fs16_get_drive_number:
     mov al, [drive_number]
+    iret
+
+
+;############################################################
+;########## WRITE NEW MBR AND CREATE A PARTITION ############
+;############################################################
+
+fs16_zero_partition_drive:
+    pusha
+    cmp bx, 20480
+    jb .error
+
+    push ebx
+    mov dl, al
+    push edx
+    call get_drive_information
+    pop edx
+    jc .error2
+
+    mov esi, ebx
+    pop ebx
+    cmp bp, 0xfd
+    je .error
+
+    push ebx
+    mov ebx, esi
+
+    cmp ebx, 0
+    jne .skip
+
+    pop ebx
+    movzx esi, bx
+    cmp esi, eax
+    ja .error
+
+    push ebx
+    xor ebx, ebx
+.skip:
+    mov al, dl
+    push eax
+    push ecx
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+
+    mov dl, [boot_drive]
+    mov dh, 0x0b
+    xor ecx, ecx
+    mov edi, esi
+    mov eax, 1
+    call read_drive
+    jc .error3
+
+    pop ecx
+    pop eax
+    pop ebx
+
+    mov [esi+11], cx
+    mov word [esi+14], 4            ;reserved sectors
+    mov byte [esi+0x10], 2          ;FAT tables
+    mov word [esi+0x11], 512        ;root table entries
+    mov [esi+0x13], bx
+    mov byte [esi+0x24], 0x80       ;BIOS drive number
+
+    movzx edx, bx
+    movzx ecx, cx
+    imul edx, ecx
+
+    cmp edx, 0x1000000
+    jbe .cluster1
+    cmp edx, 0x8000000
+    jbe .cluster4
+    
+    ;use 8 sector clusters
+    mov byte [esi+13], 8
+    jmp .calculate_fat
+.cluster1:
+    mov byte [esi+13], 1
+    jmp .calculate_fat
+.cluster4:
+    mov byte [esi+13], 4
+.calculate_fat:
+    movzx edx, bx   ;total sectors
+    sub edx, 4      ;reserved sectors
+
+    movzx edi, word [esi+0x11]
+    imul edi, 32
+
+    push eax
+    push ebx
+    push edx
+    xor edx, edx
+    mov eax, edi
+    movzx ebx, word [esi+11]
+    div ebx
+    mov edi, eax
+    pop edx
+    pop ebx
+    pop eax
+
+    sub edx, edi
+
+    ;calculate size of one FAT
+    push eax
+    push ebx
+
+    mov eax, edx
+    movzx ebx, byte [esi+13]    ;sectors per cluster
+    xor edx, edx
+    div ebx
+
+    add eax, 2      ;add system entries
+    shl eax, 1      ;*2
+    movzx ebx, word [esi+11]    ;bytes per sector
+    dec ebx
+    add eax, ebx
+
+    xor edx, edx
+    inc ebx
+    div ebx
+
+    mov edx, eax
+
+    pop ebx
+    pop eax
+
+    mov [esi+0x16], dx
+    mov word [esi+0x18], 63
+    mov word [esi+0x1a], 16
+
+    mov byte [esi+0x15], 0xf8
+    cmp bp, 0xfd
+    jne .skip2
+
+    mov byte [esi+0x15], 0xf0
+.skip2:
+    push eax
+    mov edi, esi
+    add edi, 446
+    mov ecx, 64/4
+    xor eax, eax
+    rep stosd
+    pop eax
+
+    movzx edx, bx
+    mov byte [esi+446], 0x80
+    mov byte [esi+450], 0x06    ;small FAT16 partition
+    mov dword [esi+458], edx
+
+    push eax
+    mov dl, al
+    mov dh, 0x0b
+    xor ecx, ecx
+    mov eax, 1
+    call write_drive
+    pop eax
+    jc .error
+
+    movzx ecx, word [esi+0x16]
+    shl ecx, 1
+    movzx edx, word [esi+0x11]
+    imul edx, 32
+
+    push eax
+    push ebx
+    mov eax, edx
+    xor edx, edx
+    movzx ebx, word [esi+0x0b]
+    div ebx
+    mov edx, eax
+    pop ebx
+    pop eax
+
+    push eax
+    push ecx
+    mov edi, esi
+    mov ecx, 0x1000/4
+    xor eax, eax
+    rep stosd
+    pop ecx
+    pop eax
+
+    add ecx, edx
+    add ecx, 3      ;reserved sectors
+    mov ebx, ecx
+    mov ecx, 1
+    mov dl, al
+    mov dh, 0x0b
+    mov eax, 1
+.loop:
+    call write_drive
+    jc .error
+    inc ecx
+    dec ebx
+    jnz .loop
+
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.error2:
+    pop ebx
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+.error3:
+    pop ecx
+    pop eax
+    pop ebx
+    jmp .error
+
+;############################################################
+;##################### GET DRIVE LIST #######################
+;############################################################
+
+fs16_get_drive_list:
+    pusha
+    mov dl, al
+    mov ecx, 0x1000
+    mov ah, 0x0a
+    int 0x35
+
+    push edi
+    mov edi, esi
+    call get_drive_list
+    pop edi
+
+    cmp dl, al
+    jae .copy_all
+
+    push esi
+    movzx ecx, dl
+    imul ecx, 14
+    rep movsb
+    pop esi
+    jmp .done
+
+.copy_all:
+    push esi
+    movzx ecx, al
+    imul ecx, 14
+    rep movsb
+    pop esi
+
+.done:
+    mov [.tmp], al
+
+    mov ah, 0x0b
+    mov ecx, 0x1000
+    int 0x35
+
+    popa
+    mov al, [.tmp]
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.tmp: db 0
+
+;############################################################
+;####################### COPY FILES  ########################
+;############################################################
+
+;AH = 0x07: copy file from current drive to another drive   input: ESI = path to file, EDI = path to destination dir ('/' means root dir, else = '/dirname/dir2/...), AL = destination drive number     ouput: CF if error
+fs16_copy_file_disk:
     iret
