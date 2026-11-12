@@ -437,6 +437,7 @@ init_ohci_port:
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 1
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
     pop esi
 
@@ -545,6 +546,7 @@ init_ohci_port:
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 2
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -554,6 +556,7 @@ init_ohci_port:
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 5
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -562,6 +565,7 @@ init_ohci_port:
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 6
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -1013,12 +1017,13 @@ init_ohci_port:
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov byte [esi], 3
+    mov byte [esi+2], 0x10
 
     push esi
     push ecx
     mov ecx, 24
     mov edi, esi
-    add edi, 1
+    add edi, 3
 
     mov esi, .inquiry_buffer+8
     rep movsb
@@ -1041,7 +1046,7 @@ init_ohci_port:
     shl ebx, 16
     mov bx, dx
 
-    mov [esi+25], ebx
+    mov [esi+27], ebx
     mov [max_lba], ebx
 
     xor ebx, ebx
@@ -1059,11 +1064,11 @@ init_ohci_port:
     shl ebx, 16
     mov bx, dx
 
-    mov [esi+29], ebx
+    mov [esi+31], ebx
     mov [block_size], ebx
     pop ebx
 
-    mov word [esi+33], bx
+    mov word [esi+35], bx
     add dword [usb_list_offset], USB_LIST_OFF
 
     ;## Test Read
@@ -1108,6 +1113,7 @@ align 16
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 7
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -1116,6 +1122,7 @@ align 16
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 4
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -1125,6 +1132,7 @@ align 16
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 0
+    mov byte [esi+2], 0x10
     add dword [usb_list_offset], USB_LIST_OFF
 
     add byte [usb_devices], 1
@@ -1296,7 +1304,7 @@ usb_read_sectors:
     pop ebx
 
     mov edi, init_ohci_port.td_cbw
-    mov dword [edi], 0
+    mov dword [edi], 0          ;DATA0
     or dword [edi], (1 << 19)   ;OUT
     or dword [edi], (7 << 21)   ;no interrupt
     or dword [edi], (0xf << 28)    ;not accessed
@@ -1311,6 +1319,7 @@ usb_read_sectors:
     ;fill data TD
     mov edi, td_data
     mov dword [edi], 0
+    or dword [edi], (1 << 24)   ;DATA1
     or dword [edi], (0xf << 28)
     or dword [edi], (7 << 21)
     or dword [edi], (2 << 19)        ;IN
@@ -1325,7 +1334,7 @@ usb_read_sectors:
     mov edi, init_ohci_port.td_csw
     mov dword [edi], 0          ;clear old bits
     or dword [edi], (2 << 19)   ;IN
-    ;or dword [edi], (1 << 24)   ;DATA1
+    or dword [edi], (1 << 24)   ;DATA1
     or dword [edi], (0xf << 28)
 
     mov edx, init_ohci_port.csw_buffer
@@ -1374,6 +1383,9 @@ usb_write_sectors:
     ;BL = USB address
     ;ECX = LBA
     ;ESI = Buffer
+
+    ; BUG: man muss sich den DATA Toggle Zustand nach jedem Mal merken und wiederverwenden
+    ; Man benutzt immer den letzten gespeicherten Wert
 
     pusha
 
