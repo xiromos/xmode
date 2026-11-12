@@ -29,4 +29,27 @@ Copy it to disk image:
 mcopy -i build/disk.img hello.obj ::HELLO.OBJ
 ```
 
-Supported formats are only Win32 COFF executables
+Supported formats are only Win32 COFF executables   <br>
+You can also use C as programming language:
+
+```c
+// test.c
+void _start() {
+    __asm__ volatile (
+        "movb $5, %ah\n\t"
+        "int $0x35\n\t"
+    );
+}
+```
+
+Then compile it with MinGW:
+
+```bash
+i686-w64-mingw32-gcc -ffreestanding -nostdlib -c test.c -o test.obj
+```
+
+And copy it to disk image:
+
+```bash
+mcopy -i build/disk.img test.obj ::TEST.OBJ
+```

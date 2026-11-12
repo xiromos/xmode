@@ -4,27 +4,23 @@
 ### supported color format in EBX: 0x00RRGGBB
 
 ### AH = 0x01:
-- print a null-terminated string to screen
+- print a null-terminated string to shell
 - ESI: pointer to null terminated string
 - EBX: color
-- this function should not be used and will be (hopefully) deleted soon because <br>
-  programs should use function 0x0A and print string into their window
 
 ### AH = 0x02:
-- print a single char to the screen
+- print a single char in the shell
 - AL: ASCII Char
 - EBX: color
-- should also not be used
+
 
 ### AH = 0x03:
 - add [cur_y] 8, next char/string will be printed in a new line
 - no arguments needed
-- should also not be used and will be removed soon, use function 0x0c instead
 
 ### AH = 0x04
-- print a number in white in decimal format
+- print a number in white in decimal format into shell
 - EBX: number
-- use function 0x0d
 
 ### AH = 0x0A
 - prints a string into a custom window (for example into a 400x200px window)
@@ -82,7 +78,7 @@ Currently there is only one function available and its maybe going to be moved t
 
 
 # INT 0x33
-## Filesystem (FAT16)
+## Filesystem
 
 ### AH = 0x00
 - get file information (size, first cluster number, attributes)
@@ -93,11 +89,52 @@ Currently there is only one function available and its maybe going to be moved t
     - EAX: directory attributes
     - EBX: first cluster number
 
+### AH = 0x01
+- get file list of current directory
+- EDI: buffer for file list
+- ESI: pointer to directory
+- output:
+    - filled buffer in EDI
+
+### AH = 0x0A
+- load file into memory
+- ESI: pointer to file name
+- EDI: address where to load
+- EDX: pointer to directory where the file is located
+- BL: drive number
+- output: CF if error
+
+### AH = 0x0B
+- save file from memory to disk
+- ESI: pointer to directory
+- EDI: pointer to directory where to save
+- EDX: address in memory of file
+- ECX: file size
+- BL: drive number
+- output: CF if error
+
+### AH = 0x0C
+- rename file
+- ESI: pointer to old filename
+- EDI: pointer to new filename
+- EDX: pointer to directory where the file is
+- BL: drive number
+- output: CF if error
+
+### AH = 0x0D
+- delete file
+- ESI: pointer to filename
+- EDI: pointer to directory
+- BL: drive number
+- output: CF if error
+
+### AH = 0x21
+- get current drive number
+- output: AL = drive number
+
 
 # INT 0x34
 ## Windows
-
-> Functions 0x01 and 0x02 are deprecated and shouldnt be used
 
 ### AH = 0x01
 Draw a window
@@ -120,7 +157,9 @@ Delete a window
 
 ### AH = 0x0A
 Draw a window but let the window manager decide its position and size
-
+- EBX: foreground color (text color)
+- ECX: background color
+- ESI: pointer to max. 17 byte window title
 - output:
   - EDI: pointer to window packet
   - AX: window ID

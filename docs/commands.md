@@ -6,6 +6,7 @@
 **mmap**: shows memory map + available memory<br>
 **pci**: shows all PCI devices<br>
 **usb**: shows all connected USB devices<br>
+**time**: shows current time and date
 
 ### Filesystem
 **ls**: list content of current directory<br>

@@ -45,9 +45,6 @@ dd 0
 ### Graphic kernel_packet
 *Now defined yet*
 
-### USB kernel_packet
-*Now defined yet*
-
 ### Devices, which are not listed in PCI
 Right now, the drivers for these devices are loaded in a kernel function called 'load_drivers'. The kernel first checks, if the device is connected and if yes, <br>
 it loads the driver.
