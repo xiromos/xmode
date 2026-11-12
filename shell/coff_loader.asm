@@ -1,5 +1,10 @@
 load_coff_obj:
     ;EDI = Address of program
+    ;Outputs:
+    ;EDI = start of .text section
+    ;EAX = start of .bss section (0 = no .bss section)
+    ;EBX = size of .bss section
+
     mov eax, [edi+8]        ;Offset 8: pointer to symbol table
     add eax, edi            ;pointer to symbol table
     mov ecx, [edi+12]       ;number of symbols
@@ -63,7 +68,7 @@ load_coff_obj:
 .loop2:
     inc ebx
     mov eax, [esi+24]          ;file offset to relocation table
-    
+
     mov edx, ebx
     imul edx, 16
 
@@ -86,6 +91,70 @@ load_coff_obj:
     jnz .loop2
 
     pop edi
+
+    ; #### RELOCATE BSS ####
+    push ebx
+    movzx eax, word [edi+16]
+    add eax, 20
+    add eax, edi
+    movzx ecx, word [edi+2]     ;number of sections
+
+    mov ebx, 1
+    push edi
+.search_bss:
+    push ecx
+    push edi
+    mov esi, eax
+    mov edi, section_bss_str
+    mov ecx, 5
+    repe cmpsb
+    pop edi
+    pop ecx
+    je .found_bss
+
+    inc ebx
+    add eax, 40
+    dec ecx
+    jnz .search_bss
+    jmp .bss_done
+
+.found_bss:
+    mov ecx, [eax+16]
+    cmp ecx, 0
+    je .bss_done
+
+    push eax
+    mov ah, 0x0a
+    int 0x35
+    pop eax
+
+    mov [eax+20], esi
+
+    push eax
+    push edi
+    push ecx
+    xor al, al
+    mov edi, esi
+    rep stosb
+    pop ecx
+    pop edi
+    pop eax
+
+    push edx
+    mov edx, ebx
+    imul edx, 16
+    add edx, RELOCATION_TABLE_CONTENTS
+    sub esi, edi
+    mov [edx+2], esi
+
+    pop edx
+
+.bss_done:
+    pop edi
+    pop ebx
+
+    ;##########################
+
     mov esi, RELOCATION_TABLE_CONTENTS
     add esi, 16
     mov ecx, ebx
@@ -137,16 +206,58 @@ load_coff_obj:
 .found:
     pop edi
 
+    mov edx, edi
     mov ebx, [eax+20]
     add ebx, edi
     mov edi, ebx
 
+    ;search BSS section
+    movzx eax, word [edx+16]
+    add eax, 20
+    add eax, edx
+
+    movzx ecx, word [edx+2]
+    push edi
+.search_bss2:
+    push ecx
+    push eax
+    mov esi, eax
+    mov edi, section_bss_str
+    mov ecx, 5
+    repe cmpsb
+    pop eax
+    pop ecx
+    je .found_bss2
+
+    add eax, 40
+    dec ecx
+    jnz .search_bss2
+    jmp .error_bss
+
+.found_bss2:
+    mov ecx, [eax+16]
+    cmp ecx, 0
+    je .error_bss
+
+    mov ebx, ecx
+    mov eax, [eax+20]
+    pop edi
+
     clc
     ret
 .error:
+    xor eax, eax
+    xor ebx, ebx
     stc
     ret
 
+.error_bss:
+    pop edi
+    xor eax, eax
+    xor ebx, ebx
+
+    clc
+    ret
 
 coff_relocate_section:
     pusha
@@ -186,3 +297,59 @@ coff_relocate_section:
 
     popa
     ret
+
+
+;search BSS section
+;     movzx eax, word [edx+16]
+;     add eax, 20
+;     add eax, edx
+
+;     movzx ecx, word [edx+2]     ;number of sections
+
+;     push edi
+; .search_bss:
+;     push ecx
+;     push eax
+;     mov esi, eax
+;     mov edi, section_bss_str
+;     mov ecx, 5
+;     repe cmpsb
+;     pop eax
+;     pop ecx
+;     je .found_bss
+
+;     add eax, 40
+;     dec ecx
+;     jnz .search_bss
+;     jmp .error_bss
+
+; .found_bss:
+;     mov ecx, [eax+16]
+;     cmp ecx, 0
+;     je .error_bss
+
+;     push eax
+;     mov ah, 0x0a
+;     int 0x35
+;     pop eax
+
+;     mov [eax+20], esi
+;     mov ebx, ecx
+
+;     movzx ecx, word [eax+32]
+;     cmp ecx, 0
+;     je .skip_relocation
+
+;     mov eax, [eax+24]
+;     add eax, edx
+
+;     push edx
+;     mov edi, edx
+;     mov edx, esi
+;     call coff_relocate_section
+;     pop edx
+
+; .skip_relocation:
+;     pop edi
+
+;     mov eax, esi
