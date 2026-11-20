@@ -7,7 +7,7 @@
 ; X AH = 0x04: rename a file                                input: ESI = old filename, EDI = new filename                   output: CF if error
 ; X AH = 0x05: delete a file                                input: ESI = filename                                           output: CF if error
 ;AH = 0x06: copy file from one dir to another dir           input: ESI = path to file, EDI = path to destination directory where to copy    output: CF if error
-;AH = 0x07: copy file from current drive to another drive   input: ESI = path to file, EDI = path to destination dir ('/' means root dir, else = '/dirname/dir2/...), AL = destination drive number     ouput: CF if error
+;AH = 0x07: copy file from current drive to another drive   input: ESI = path to file, EDI = path to destination dir, AL = destination drive number  (for directories: always begin with '/' which means 'root directory, then list the first dir, second... (eg. /DIR1/DIR2/.../FILENAME.TXT))   ouput: CF if error
 ; X AH = 0x08: load program into memory                     input: ESI = program name, EDI = address in memory                               output: CF if error
 ;AH = 0x09: format a drive / partition                      input: AL  = drive number, BL = partition number (0-3), BH = filesystem          output: CF if error
 
@@ -15,7 +15,10 @@
 ;AH = 0x0B: save file from not-root directory               input: ESI = file name, EDI = where to save (address of loaded directory), EDX = address of file, ECX = file size, BL = drive number       output: CF if error
 ;AH = 0x0C: rename file in not-root directory               input: ESI = old file name, EDI = new file name, EDX = pointer to directory, BL = drive number      output: CF if error
 ;AH = 0x0D: delete file from not-root directory             input: ESI = file name, EDI = pointer to directory, BL = drive number   output: CF if error
-;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3), output: CL = drive number
+;AH = 0x0E: create empty directory                          input: ESI = file name, EDI = pointer to parent directory, BL = drive number            ouput: CF if error
+;AH = 0x0F: delete directory
+
+;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3)
 ;AH = 0x21: get current drive number                        output: AL = drive number
 ;AH = 0x22: zero a drive, write fresh MBR to it, write a FAT16 boot partition to it          input: BX = partition size in sectors, DL = drive number              output: CF if error
 ;AH = 0x23: get drive list                                  input: EDI = pointer to buffer, AL = max. number of drives to list (if AL = 0xff, then list all available drives)         output: filled buffer, AL = actual number of drives
@@ -146,6 +149,8 @@ fs16_handler:
     je fs16_rename_file2
     cmp ah, 0x0d
     je fs16_delete_file2
+    cmp ah, 0x0e
+    je fs16_create_dir
     cmp ah, 0x20
     je fs16_change_drive
     cmp ah, 0x21
@@ -1776,6 +1781,700 @@ fs16_get_drive_list:
 ;####################### COPY FILES  ########################
 ;############################################################
 
-;AH = 0x07: copy file from current drive to another drive   input: ESI = path to file, EDI = path to destination dir ('/' means root dir, else = '/dirname/dir2/...), AL = destination drive number     ouput: CF if error
 fs16_copy_file_disk:
+    pusha
+    call string_uppercase
+
+    cli
+    mov [.drive], al
+    mov [.dest_dir], edi
+    call fs16_get_dir_file
+    jc .error
+
+    push eax
+    push edi
+
+    mov edi, eax
+    mov edx, eax
+
+    push edi
+    xor ah, ah
+    mov bl, [drive_number]
+    int 0x33
+    pop edi
+    jc .error2
+
+    push esi
+    mov ebp, ecx
+    mov ah, 0x0a
+    int 0x35
+
+    mov edx, edi
+    mov edi, esi
+    pop esi
+    mov ah, 0x0a
+    mov bl, [drive_number]
+    int 0x33
+    jc .error2
+
+    mov [.file], edi
+
+    pop edi
+    push edi
+
+    mov ah, 0x20
+    mov esi, .drive
+    int 0x33
+
+    mov esi, edi
+.loop2:
+    lodsb
+    cmp al, 0
+    jne .loop2
+
+    dec esi
+    mov byte [esi], '/'
+
+    mov esi, [.dest_dir]
+    mov al, [.drive]
+    call fs16_write_dir_file
+    jc .error2
+
+    push edx
+    push eax
+
+    mov edi, eax
+    mov edx, [.file]
+    mov ecx, ebp
+    mov ah, 0x0b
+    mov bl, [.drive]
+    int 0x33
+
+    pop eax
+    pop edx
+
+    pushfd
+    mov esi, eax
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+    popfd
+    pop edi
+    push edi
+
+    jc .error2
+
+    pop edi
+    pop eax
+
+    call .tidy_up
+    popa
+    and dword [esp+8], 0xfffffffe
     iret
+
+.tidy_up:
+    mov esi, edx
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+
+    mov esi, [.file]
+    mov ecx, ebp
+    mov ah, 0x0b
+    int 0x35
+
+    mov esi, edi
+.loop:
+    lodsb
+    cmp al, 0
+    jne .loop
+
+    dec esi
+    mov byte [esi], '/'
+
+    mov al, [drive_number]
+    mov [.drive], al
+    mov esi, .drive
+    mov ah, 0x20
+    int 0x33
+    ret
+
+.error:
+    mov esi, eax
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+    popa
+    or dword [esp+8], 1
+    iret
+.error2:
+    call .tidy_up
+    pop edi
+    pop eax
+    popa
+    or dword [esp+8], 1
+    iret
+
+.drive: db 0, '.0'
+.dest_dir: dd 0
+.file: dd 0
+
+fs16_write_dir_file:
+    ;Input: ESI = path to file ((eg. /DIR1/DIR2/.../FILENAME.TXT))
+    ;AL = drive number
+    ;Output:
+    ;   ESI = pointer to filename
+    ;   EDI = pointer to path (without the filename)
+    ;   EAX = address of the loaded directory
+
+    pusha
+    cli
+
+    cmp byte [esi], '/'
+    jne .error
+    inc esi ;skip the '/'
+
+    mov [.dir], esi
+    mov [.drive], al
+    mov dword [.cur_dir_addr], 0
+
+.loop:
+    mov edi, .dir_buffer
+    call get_dir_name
+
+    mov ebp, ecx
+
+    push esi
+    xor ecx, ecx
+    mov esi, .dir_buffer
+    mov edi, .dir_buffer2
+    call parse_arg_loop
+    pop esi
+
+    cmp byte [.dir_buffer2+10], 0x20
+    jne .done
+
+    push esi
+    xor ah, ah
+    mov edi, [.cur_dir_addr]
+    mov esi, .dir_buffer2
+    mov bl, [.drive]
+    int 0x33
+    pop esi
+    jc .create_dir
+
+.load:
+    push esi
+    mov ecx, 0x1000     ;directories are limitied to 4Kib in size
+    mov ah, 0x0a
+    int 0x35
+
+    mov ah, 0x0a
+    mov edi, esi
+    mov esi, .dir_buffer2
+    mov edx, [.cur_dir_addr]
+    mov bl, [.drive]
+    int 0x33
+    pop esi
+    jc .error
+
+    cmp dword [.cur_dir_addr], root_addr
+    je .skip_free
+
+    push esi
+    mov esi, [.cur_dir_addr]
+    mov ah, 0x0b
+    int 0x35
+    pop esi
+
+.skip_free:
+    mov [.cur_dir_addr], edi
+    add esi, ebp
+
+    lodsb
+    mov ah, al
+
+    lodsb
+    cmp al, 0
+    je .error
+
+    dec esi
+    cmp ah, '/'
+    je .loop
+    jmp .error
+
+.done:
+    cmp byte [.dir_buffer2+9], 0x20
+    je .error
+
+    dec esi
+    mov byte [esi], 0
+    popa
+    mov esi, .dir_buffer2
+    mov edi, [.dir]
+    mov eax, [.cur_dir_addr]
+    sti
+    clc
+    ret
+
+.create_dir:
+    push esi
+    push edi
+    mov ah, 0x0e
+    mov bl, [.drive]
+    mov esi, .dir_buffer2
+    mov edi, [.cur_dir_addr]
+    int 0x33
+
+    pop edi
+    pop esi
+    jc .error
+    jmp .load
+
+.error:
+    popa
+    stc
+    sti
+    ret
+
+.dir_buffer: times 12 db 0
+.dir_buffer2: times 12 db 0
+.cur_dir_addr: dd 0
+.dir: dd 0
+.tmp: dd 0
+.drive: db 0
+
+fs16_get_dir_file:
+    ;Input: ESI = path to file ((eg. /DIR1/DIR2/.../FILENAME.TXT))
+    ;Output:
+    ;   ESI = pointer to filename
+    ;   EDI = pointer to path (without the filename)
+    ;   EAX = address of the loaded directory
+
+    pusha
+    cli
+
+    cmp byte [esi], '/'
+    jne .error
+
+    mov [.dir], esi
+    inc esi ;skip the '/'
+
+.loop:
+    mov edi, .dir_buffer
+    call get_dir_name
+
+    mov ebp, ecx
+
+    push esi
+    xor ecx, ecx
+    mov esi, .dir_buffer
+    mov edi, .dir_buffer2
+    call parse_arg_loop
+    pop esi
+
+    push esi
+    xor ah, ah
+    mov edi, [.cur_dir_addr]
+    mov esi, .dir_buffer2
+    mov bl, [drive_number]
+    int 0x33
+    pop esi
+    jc .error
+
+    test al, (1 << 4)
+    jz .done
+
+    push esi
+    mov ecx, 0x1000     ;directories are limitied to 4Kib in size
+    mov ah, 0x0a
+    int 0x35
+
+    mov ah, 0x0a
+    mov edi, esi
+    mov esi, .dir_buffer2
+    mov edx, [.cur_dir_addr]
+    mov bl, [drive_number]
+    int 0x33
+    pop esi
+    jc .error
+
+    cmp dword [.cur_dir_addr], root_addr
+    je .skip_free
+
+    push esi
+    mov esi, [.cur_dir_addr]
+    mov ah, 0x0b
+    int 0x35
+    pop esi
+
+.skip_free:
+    mov [.cur_dir_addr], edi
+    add esi, ebp
+
+    lodsb
+    mov ah, al
+
+    lodsb
+    cmp al, 0
+    je .error
+
+    dec esi
+    cmp ah, '/'
+    je .loop
+    jmp .error
+
+.done:
+    dec esi
+    mov byte [esi], 0
+    popa
+    mov esi, .dir_buffer2
+    mov edi, [.dir]
+    mov eax, [.cur_dir_addr]
+
+    mov dword [.cur_dir_addr], 0
+    sti
+    clc
+    ret
+.error:
+    mov dword [.cur_dir_addr], 0
+    popa
+    mov eax, [.cur_dir_addr]
+    stc
+    sti
+    ret
+
+.dir_buffer: times 12 db 0
+.dir_buffer2: times 12 db 0
+.cur_dir_addr: dd 0
+.dir: dd 0
+.tmp: dd 0
+
+
+;############################################################
+;##################### CREATE DIRECTORY #####################
+;############################################################
+
+fs16_create_dir:
+    pusha
+    push esi
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+
+    push edi
+    mov edi, esi
+    xor eax, eax
+    mov ecx, 0x1000/4
+    rep stosd
+    pop edi
+
+    push edi
+    push esi
+    mov edi, esi
+    mov esi, fs16_write_file2.dot_entry
+    mov ecx, 11
+    rep movsb
+    pop esi
+    push esi
+    mov edi, esi
+    add edi, 32
+    mov esi, dot_dot_entry
+    mov ecx, 11
+    rep movsb
+    pop esi
+    pop edi
+
+    mov dx, [subdir_entries]
+    cmp edi, root_addr
+    je .next
+
+    push edi
+.loop4:
+    push esi
+    mov esi, fs16_write_file2.dot_entry
+    mov ecx, 11
+    push edi
+    rep cmpsb
+    pop edi
+    pop esi
+    je .found
+
+    add edi, 32
+    dec dx
+    jnz .loop4
+
+    pop edi
+    pop esi
+    popa
+    or dword [esp+8], 1
+    iret
+.found:
+    mov ax, [edi+0x1a]
+    mov [esi+0x3a], ax
+    pop edi
+.next:
+    mov edx, esi
+    pop esi
+
+    mov [.drive_number], bl
+    mov [.dir], edi
+    mov [.file], edx
+
+    movzx ebp, word [subdir_entries]
+    cmp edi, root_addr
+    jne .loop1
+
+    movzx ebp, word [root_entries]
+.loop1:
+    mov al, [edi]
+    cmp al, 0
+    je .free_entry
+    cmp al, 0xe5
+    je .free_entry
+
+    add edi, 32
+    dec ebp
+    jnz .loop1
+    jmp .error
+.free_entry:
+    ;EDI points now to free directory entry
+    mov eax, 512
+    movzx ebx, byte [sec_per_cluster]
+    imul eax, ebx
+    mov ecx, 0x1000
+
+    add ecx, eax
+    dec ecx
+
+    mov ebx, ecx
+    mov ecx, eax
+    mov eax, ebx
+
+    mov ebp, esi
+    mov esi, edx
+
+    xor edx, edx
+    div ecx
+    mov ecx, eax
+
+    mov [.dir_entry], edi
+
+    mov ebx, 2  ;cluster 0 and 1 are reserved
+    mov edx, [fat_size]
+    mov eax, 512
+    imul edx, eax    ;set limit
+    shr edx, 1
+
+.first_cluster:
+    mov edi, fat_addr
+    mov eax, ebx
+    shl bx, 1
+    cmp [edi+ebx], 0
+    je .found_first_cluster
+    mov ebx, eax
+    inc ebx
+    dec edx
+    jnz .first_cluster
+    jmp .error
+
+.found_first_cluster:
+    mov [.first_cluster16], ax
+    mov [.prev_cluster16], ax
+
+    push esi
+    mov esi, [.file]
+    mov [esi+0x1a], ax
+    pop esi
+
+    dec ecx
+    jz .one_cluster
+    inc ecx
+.loop:
+    mov bx, ax
+    shl bx, 1
+    cmp [edi+ebx], 0
+    je .next_cluster
+    inc ax
+    dec edx
+    jnz .loop
+    jmp .error
+.next_cluster:
+    mov bx, [.prev_cluster16]
+    shl bx, 1
+    mov [edi+ebx], ax
+    mov [.prev_cluster16], ax
+
+    push eax
+    push ecx
+    push ebx
+    push edx
+
+    call cluster_to_sec
+    mov ecx, eax
+    clc
+    add ecx, dword [hidden_sectors]
+    jc .error_write
+    movzx eax, byte [sec_per_cluster]
+    mov dh, 0x0b
+    mov dl, [.drive_number]
+    call write_drive
+    jc .error_write
+
+    imul eax, 512
+    add esi, eax
+
+    pop edx
+    pop ebx
+    pop ecx
+    pop eax
+
+    mov edi, fat_addr
+    inc ax
+    dec ecx
+    jnz .loop
+    jmp .last_cluster
+.one_cluster:
+    mov word [edi+ebx], 0xfff8
+    movzx eax, word [.first_cluster16]
+    call cluster_to_sec
+    movzx ecx, ax
+    clc
+    add ecx, dword [hidden_sectors]
+    jc .error
+    movzx eax, byte [sec_per_cluster]
+    mov dl, [.drive_number]
+    mov dh, 0x0b
+    call write_drive
+    jc .error
+    jmp .done
+.error_write:
+    pop edx
+    pop ebx
+    pop ecx
+    pop eax
+    popa
+    or dword [esp+8], 1
+    iret
+.last_cluster:
+    mov bx, [.prev_cluster16]
+    shl bx, 1
+    mov word [fat_addr+bx], 0xfff8
+
+.done:
+    mov esi, ebp
+    mov edi, [.dir_entry]
+    mov ecx, 11
+    push edi
+    rep movsb
+    pop edi
+
+    mov byte [edi+0x0b], 0x10       ;directory
+    mov ax, [.first_cluster16]
+    mov [edi+0x1a], ax
+    mov ecx, [.file_size]
+    mov [edi+0x1c], ecx
+    
+    cmp dword [.dir], 0
+    jne .skip2
+
+    mov ebp, [.drive_number]
+    call fs16_write_root2
+    jc .error
+    call fs16_write_fat2
+    jc .error
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.skip2:
+    mov esi, [.dir]
+    mov edi, fs16_write_file2.dot_entry
+    mov edx, 0x1000/32
+.loop2:
+    mov ecx, 11
+    push edi
+    push esi
+    rep cmpsb
+    pop esi
+    pop edi
+    je .found_dot
+
+    add esi, 32
+    dec edx
+    jnz .loop2
+    jmp .error
+.found_dot:
+    movzx eax, word [esi+0x1a]
+    mov ebp, eax
+    call cluster_to_sec
+    clc
+    add eax, dword [hidden_sectors]
+    jc .error
+    mov ecx, eax
+    movzx eax, byte [sec_per_cluster]
+    mov esi, [.dir]
+    mov dl, [.drive_number]
+    mov dh, 0x0b
+    call write_drive
+    jc .error
+
+.loop3:
+    mov ebx, ebp    ;cluster number
+    mov edi, fat_addr
+    shl ebx, 1
+    movzx eax, word [edi+ebx]
+    cmp ax, 0xfff8
+    jae .done2
+
+    mov ebp, eax
+
+    push eax
+    movzx eax, word [bytes_per_sec]
+    movzx ebx, byte [sec_per_cluster]
+    xor edx, edx
+    mul ebx
+    add esi, eax
+    pop eax
+
+    call cluster_to_sec
+    mov ecx, eax
+    clc
+    add ecx, dword [hidden_sectors]
+    jc .error
+    movzx eax, byte [sec_per_cluster]
+    mov dl, [.drive_number]
+    mov dh, 0x0b
+    call write_drive
+    jc .error
+    jmp .loop3
+
+.done2:
+    mov ebp, [.drive_number]
+    call fs16_write_fat2
+    jc .error
+
+    mov ah, 0x0b
+    mov ecx, 0x1000
+    mov esi, [.file]
+    int 0x35
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.error:
+    mov ah, 0x0b
+    mov ecx, 0x1000
+    mov esi, [.file]
+    int 0x35
+
+    popa
+    or dword [esp+8], 1
+    iret
+
+.file_size: dd 0
+.dir: dd 0
+.drive_number: db 0
+.dir_entry: dd 0
+.first_cluster16: dw 0
+.prev_cluster16: dw 0
+.file: dd 0
