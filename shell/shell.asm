@@ -350,6 +350,11 @@ exec_cmd:
     call cmp_str
     jc show_history
 
+    mov edi, command_buffer
+    mov esi, mkdir_str
+    call cmp_str
+    jc .mkdir
+
     jmp .exec_program
     ret
 .reboot_system:
@@ -358,6 +363,27 @@ exec_cmd:
     int 0x35
 
     ret
+.mkdir:
+    mov esi, [argument]
+    call string_uppercase
+
+    xor ecx, ecx
+    mov edi, read_buffer
+    call parse_arg_loop
+
+    mov ah, 0x0e
+    mov bl, [drive_number]
+    mov esi, read_buffer
+    mov edi, [cur_dir_addr]
+    int 0x33
+    jc .mkdir_err
+    ret
+.mkdir_err:
+    mov esi, .mkdir_err_str
+    mov ebx, COLOR_RED
+    call print_string
+    ret
+.mkdir_err_str: db 'Error while creating directory', 0x0a, 0
 .init_dhcp:
     cmp byte [.dhcp], 1
     je .dhcp_error
@@ -624,6 +650,15 @@ exec_cmd:
     jnc .found_xme_executable
 
     mov esi, read_buffer
+    mov byte [esi+8], 'B'
+    mov byte [esi+9], 'I'
+    mov byte [esi+10], 'N'
+    xor ah, ah
+    mov edi, [cur_dir_addr]
+    int 0x33
+    jnc .bin_prog
+
+    mov esi, read_buffer
     mov byte [esi+8], 'O'
     mov byte [esi+9], 'B'
     mov byte [esi+10], 'J'
@@ -637,8 +672,25 @@ exec_cmd:
 .found_xme_executable:
     mov al, '+'
     call print_char
+    mov ah, 0x01
+    int 0x35
     ret
     ;call load_xme
+.bin_prog:
+    mov esi, read_buffer
+    mov edi, read_buffer
+    mov ebx, [cur_dir_addr]
+
+    mov ecx, read_buffer3
+    mov edx, 0xffffffff
+    mov ebp, 0xffffffff
+
+    mov ah, 0x14
+    mov al, 1
+    int 0x35
+    xor ah, ah
+    jc .program_error
+    ret
 .found_prog:
     ;mov [program_address], edi
 
@@ -2494,7 +2546,7 @@ get_dir_name:
     je .done
 
     inc ecx
-    cmp ecx, 11
+    cmp ecx, 12
     jae .done
 
     stosb

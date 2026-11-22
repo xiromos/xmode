@@ -1164,11 +1164,11 @@ keymap:
 
 OHCI_ADDR       equ 0x61000
 UHCI_ADDR       equ 0x64000
-EHCI_ADDR       equ 0x67000
-XHCI_ADDR       equ 0x69000
-NVME_ADDR       equ 0x6d000
-FDC_ADDR        equ 0x70000
-SDC_ADDR        equ 0x72000
+EHCI_ADDR       equ 0x6a000
+XHCI_ADDR       equ 0x6d000
+NVME_ADDR       equ 0x70000
+FDC_ADDR        equ 0x73000
+SDC_ADDR        equ 0x75000
 
 section .bss
 kernel_packet:

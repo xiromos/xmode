@@ -23,12 +23,20 @@
 ;AH = 0x0B:     print char with custom CurX and CurY - increases X and Y
 ;   AL: character
 ;   EDI: pointer to window packet
+
+;AH = 0x10:     change cursor position for windows, drawn by the window manager
+;   AL = 1:     add CurX 8
+;   AL = 2:     sub CurX 8
+;   AL = 3:     add CurY 16
+;   AL = 4:     sub CurY 16
+;   Note: if the cursor position outranges the window border, there will be a scroll or a newline
+
 ;AH = 0x1A:     print string into window, drawn by window manager
 ;   ESI = pointer to string
 ;   EDI = pointer to window packet
 ;   BX = WINDOW ID
 ;AH = 0x1B:     print single char into window, drawn by window manager
-;   AL = char
+;   DX = char
 ;   EDI = window packet
 ;   BX = WINDOW ID
 ;AH = 0x1C:     add +16 to CurY in window packet
@@ -60,6 +68,9 @@ output_handler:
     je .print_dec_custom
     cmp ah, 0x0e
     je .custom_clear
+
+    cmp ah, 0x10
+    je winmngr_cursor_functions
 
     cmp ah, 0x1a
     je print_string_winmngr
@@ -1030,3 +1041,27 @@ print_char_custom_unicode:
     call custom_scroll
     sub dword [edi+20], 32
     jmp .done
+
+
+winmngr_cursor_functions:
+    cmp al, 1
+    je .add_x
+    cmp al, 2
+    je .sub_x
+    cmp al, 3
+    je .add_y
+    cmp al, 4
+    je .sub_y
+
+    popa
+    or dword [esp+8], 1
+    iret
+
+.add_x:
+.sub_x:
+.add_y:
+.sub_y:
+.done:
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret

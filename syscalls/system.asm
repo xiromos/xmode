@@ -5,7 +5,7 @@
 ;   BH = 0x02: reboot system
 ;AH = 0x01: Freeze System (debug)
 ;AH = 0x02: start a foreground task (that means the task has control over keyboard and screen)          ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename       Output: CF on Error, AH = Error code (0x00 = fs error, 0x01 = COFF error)
-;AH = 0x03: start a background task                                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename       Output: CF on Error, AH = Error code (0x00 = fs error, 0x01 = COFF error)
+;AH = 0x03: start a background task   (←- Win32 COFF files only -î)                                           ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename       Output: CF on Error, AH = Error code (0x00 = fs error, 0x01 = COFF error)
 ;AH = 0x04: terminate a task (not the caller)                                                           ;EBX = PID or ESI = Taskname (if one is set, other should be zero)  CF on error
 ;   Error ist set if the PID is 0 or 1 or if the task is a kernel task
 ;AH = 0x05: terminate the process which called the syscall
@@ -20,13 +20,20 @@
 ;   AL = 0x81: set sleeping flag (task PID in BX)
 ;       BX = PID
 ;AH = 0x08: get PID of current task                                                                     ;output: AX = PID
-;AH = 0x0A: allocate heap                                                                               ;Input: ECX = size         Output: ESI = pointer to heap chunk
+;AH = 0x09: get task flags
+;   AL = 0x01: return 'Flags' field                                                                     ;Input: BX = PID           Output: EAX = value from 'Flags' field
+;   AL = 0x02: return 'Flags2' field                                                                    ;Input: BX = PID           Output: AL = value from 'Flags2' field 
+;AH = 0x0A: allocate heap                                                                               ;Input: ECX = size         Output: ESI = pointer to 4Kib aligned heap chunk
 ;AH = 0x0B: free heap                                                                                   ;Input: ESI = pointer to allocated chunk, ECX = size
 ;AH = 0x0C: allocate heap from low memory area                                                          ;Input: ECX = size         Output: ESI = pointer to heap chunk
 ;AH = 0x0D: free heap from low memory area                                                              ;Input: ESI = pointer to allocated chunk, ECX = size
 
 ;AH = 0x12: start already loaded task in foreground                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
 ;AH = 0x13: start already loaded task in background                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
+;AH = 0x14: functions for BIN programs
+;   AL = 1: start a foreground task of .bin program                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename
+;   AL = 2: start a background task of .bin program                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename
+;   AL = 3: map a single page                                                                           ;EBX = virtual address, ECX = physical address
 
 ;AH = 0x20: functions for playing a WAV file (BH = subfunction)
 ;   BH = 0x01: play WAV file (expects EDI = start address of file)
@@ -82,6 +89,8 @@ program_sys_handler:
     je change_task_state
     cmp ah, 0x08
     je .get_pid
+    cmp ah, 0x09
+    je task_get_flags
     cmp ah, 0x0a
     je alloc_heap
     cmp ah, 0x0b
@@ -94,6 +103,8 @@ program_sys_handler:
     je start_task_fg2
     cmp ah, 0x13
     je start_task_bg2
+    cmp ah, 0x14
+    je bin_prog_functions
     cmp ah, 0x20
     je play_wav_file
     cmp ah, 0x21
@@ -101,6 +112,7 @@ program_sys_handler:
     cmp ah, 0x22
     je timer_functions
 
+.error:
     or dword [esp+8], 1
     iret
 .test_stop:
@@ -108,6 +120,12 @@ program_sys_handler:
     hlt
 .terminate_process:
     cli
+
+    cmp word [current_task], 1
+    jbe .error
+
+    mov eax, PAGE_DIR
+    mov cr3, eax
 
     mov bx, [current_task]
     call free_task_heap
@@ -118,27 +136,37 @@ program_sys_handler:
     add edi, ecx
     mov byte [edi], 0xe5
 
-    ; cmp ah, 0x06
-    ; je .skip
-
-    mov ax, [current_task]
-    mov word [current_task], 1
-    push ax
-
     mov esi, [edi+19]       ;start address
     cmp esi, 0xfffffffe
     je .skip_free_heap
     mov ecx, [edi+23]       ;size
+    call force_free_heap
     mov ah, 0x0b
     int 0x35
 
-    pop ax
-    mov [current_task], ax
+    mov esi, [edi+27]
+    mov ecx, [edi+31]
+    cmp esi, 0
+    je .skip_free_heap
+    cmp ecx, 0
+    je .skip_free_heap
+    call force_free_heap
 
 .skip_free_heap:
-    mov dword [edi+11], 0
-    mov dword [edi+19], 0
-    mov dword [edi+23], 0
+    mov al, [edi+35]        ;flags2
+
+    ; mov dword [edi+11], 0
+    ; mov dword [edi+19], 0
+    ; mov dword [edi+23], 0
+    ; mov dword [edi+27], 0
+    ; mov dword [edi+31], 0
+    ; mov dword [edi+35], 0
+    push eax
+    xor al, al
+    mov ecx, TASK_SIZE-11
+    add edi, 11
+    rep stosb
+    pop eax
 
     dec word [task_count]
 
@@ -147,6 +175,13 @@ program_sys_handler:
     jne .skip
 
     mov word [main_task], 1
+    test al, (1 << 0)
+    jz .skip
+
+    call .srch_win_task
+    jc .skip
+
+    mov [main_task], ax
 .skip:
     mov edi, tasks_esp
     inc word [current_task]
@@ -189,6 +224,63 @@ program_sys_handler:
 
 .get_pid:
     mov ax, [current_task]
+    iret
+
+.srch_win_task:
+    ;output: AX = PID
+    push edi
+    push ecx
+
+    mov edi, tasks_esp
+    add edi, TASK_SIZE
+    movzx ecx, word [max_tasks]
+    mov ax, 1
+.srch_win_loop:
+    test byte [edi+35], (1 << 0)
+    jnz .fnd_win_task
+
+    add edi, TASK_SIZE
+    inc ax
+    dec ecx
+    jnz .srch_win_loop
+
+    pop ecx
+    pop edi
+    stc
+    ret
+
+.fnd_win_task:
+    pop ecx
+    pop edi
+    clc
+    ret
+
+task_get_flags:
+    cmp al, 1
+    je .flags_field
+    cmp al, 2
+    je .flags2_field
+
+    or dword [esp+8], 1
+    iret
+
+.flags_field:
+    push edi
+    movzx edi, bx
+    imul edi, TASK_SIZE
+    add edi, tasks_esp
+    mov eax, [edi+11]
+    pop edi
+    jmp .done
+.flags2_field:
+    push edi
+    movzx edi, bx
+    imul edi, TASK_SIZE
+    add edi, tasks_esp
+    mov al, [edi+35]
+    pop edi
+.done:
+    and dword [esp+8], 0xfffffffe
     iret
 
 start_task_bg2:
@@ -237,13 +329,16 @@ start_task_bg2:
     iret
 .found_slot:
     push esi
+    push edi
     push ecx
     mov ecx, 11
     rep movsb
     pop ecx
+    pop edi
     pop esi
 
     mov dword [edi+19], 0xfffffffe  ;program does not use heap memory
+    mov dword [edi+39], PAGE_DIR
 
     mov [kernel_stack], esp
 
@@ -341,13 +436,16 @@ start_task_fg2:
     iret
 .found_slot:
     push esi
+    push edi
     push ecx
     mov ecx, 11
     rep movsb
     pop ecx
+    pop edi
     pop esi
 
     mov dword [edi+19], 0xfffffffe  ;program does not use heap memory
+    mov dword [edi+39], PAGE_DIR
 
     mov [kernel_stack], esp
 
@@ -414,9 +512,10 @@ kill_task:
     je .error
 
     mov dx, [max_tasks]
-    xor ebx, ebx
-.loop:
+    mov ebx, 1
     mov edi, tasks_esp
+    add edi, TASK_SIZE
+.loop:
     mov ecx, 11
     push edi
     push esi
@@ -440,7 +539,7 @@ kill_task:
     cli
     cmp bx, [current_task]
     je program_sys_handler.terminate_process
-    
+
     mov ecx, ebx
 
     imul ebx, TASK_SIZE
@@ -462,14 +561,28 @@ kill_task:
     
     push ecx
     mov ecx, [ebx+23]
-    mov ah, 0x0b
-    int 0x35
+    call force_free_heap
     pop ecx
 
 .skip_free_heap:
+    mov al, [ebx+35]
+
     mov dword [ebx+11], 0
     mov dword [ebx+19], 0
     mov dword [ebx+23], 0
+    mov dword [ebx+27], 0
+    mov dword [ebx+31], 0
+    mov dword [ebx+35], 0
+
+    push eax
+    push ecx
+    mov edi, ebx
+    add edi, 11
+    mov ecx, TASK_SIZE-11
+    xor al, al
+    rep stosb
+    pop ecx
+    pop eax
 
     dec word [task_count]
 
@@ -477,6 +590,13 @@ kill_task:
     jne .done
 
     mov word [main_task], 1
+    test al, (1 << 0)
+    jz .done
+
+    call program_sys_handler.srch_win_task
+    jc .done
+
+    mov [main_task], ax
 .done:
     popa
     and dword [esp+8], 0xfffffffe
@@ -636,6 +756,10 @@ alloc_heap:
     ;Output: ESI = pointer to heap start
     cli
     pusha
+    
+    cmp ecx, 0
+    je .error
+
     xor edx, edx
     mov eax, ecx
     add eax, HEAP_CHUNK_SIZE-1
@@ -699,6 +823,12 @@ alloc_heap:
     mov esi, [.tmp]
     and dword [esp+8], 0xfffffffe
     iret
+.error:
+    popa
+    or dword [esp+8], 1
+    mov esi, 0xfff00000
+    iret
+
 .tmp: dd 0
 .error_msg: db 'Low Memory. Shell Tried To Search Free Memory But Failed.', 0x0a
             db 'Try To Install More RAM. If You Installed Enough RAM, Maybe There Is A Memory Leak', 0 
@@ -717,6 +847,9 @@ free_heap:
     ;       ECX = size of allocated heap
     cli
     pusha
+    cmp esi, dword [heap_start_ptr]
+    jb .error
+
     sub esi, dword [heap_start_ptr]
     mov eax, esi
     mov ebx, HEAP_CHUNK_SIZE
@@ -750,6 +883,35 @@ free_heap:
     popa
     or dword [esp+8], 1
     iret
+
+force_free_heap:
+    cli
+    pusha
+    sub esi, dword [heap_start_ptr]
+    mov eax, esi
+    mov ebx, HEAP_CHUNK_SIZE
+    xor edx, edx
+    div ebx
+
+    imul eax, 2
+    mov edi, [heap_table]
+    add edi, eax
+
+    xor edx, edx
+    mov eax, ecx
+    add eax, HEAP_CHUNK_SIZE-1
+    mov ebx, HEAP_CHUNK_SIZE
+    div ebx
+
+    mov ecx, eax
+.loop:
+    mov word [edi], 0
+    add edi, 2
+    dec ecx
+    jnz .loop
+
+    popa
+    ret
 
 ; Heap memory starts at 0x1000000. There is a list at address 0x750000 which lists all free and used heap blocks.
 ; Low heap memory starts at 0xc00000 and the low heap list which lists free and used heap blocks sits at address 0x850000.
@@ -912,13 +1074,17 @@ start_task_bg:
     ;EDX = pointer to second argument
     ;EBP = pointer to other arguments (which are stored in a structure for example)
 
-    cli
     pusha
     cmp esi, 0
     je .error
     cmp edi, 0
     je .error
 
+.wait:
+    cmp byte [.task_state], 0
+    jne .wait
+
+    cli
     mov [.task_state], ah
 
     mov [.first_arg], ecx
@@ -933,6 +1099,7 @@ start_task_bg:
     mov edi, ebx
     int 0x33
     pop edi
+    jc .too_much_tasks
 
     mov ax, [max_tasks]
     cmp word [task_count], ax
@@ -943,6 +1110,7 @@ start_task_bg:
     int 0x35
     jnc .continue
 
+    mov byte [.task_state], 0
     pop ebx
     pop esi
     or dword [esp+8], 1
@@ -964,11 +1132,21 @@ start_task_bg:
     push esi
     call load_coff_obj
     pop esi
-    ;jc .coff_error
+    jc .coff_error
 
+    cmp eax, 0
+    je .bss_buffer
+    cmp ebx, 0
+    je .bss_buffer
+
+    mov [.buffer_start], eax
+    mov [.buffer_size], ebx
+
+.bss_buffer:
     mov eax, edi
 
     mov dx, [task_slots]
+    ;dec dx                  ;skip PID 1
     mov ecx, 2
     pop esi
 
@@ -1000,6 +1178,27 @@ start_task_bg:
 
     mov [kernel_stack], esp
 
+    ;allocating page directory
+    push eax
+    push ecx
+    mov ax, [current_task]
+    push ax
+    mov [current_task], cx
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+    mov [.page_dir], esi
+
+    mov edi, esi
+    xor eax, eax
+    mov ecx, 0x1000/4
+    rep stosd
+
+    pop ax
+    mov [current_task], ax
+    pop ecx
+    pop eax
+
     mov edx, eax
     mov eax, program_stack_off
     imul eax, ecx
@@ -1024,7 +1223,6 @@ start_task_bg:
 
     push dword (3*8) | 3    ;SS
     push esp
-    ;pushfd                 ;bug - if program does infinite loop -> freeze
     push dword 0x202        ;enable interrupt flag
     push dword code_off_user;CS
     push eax
@@ -1044,6 +1242,12 @@ start_task_bg:
     mov [edi+19], eax
     mov eax, [.size]
     mov [edi+23], eax
+    mov eax, [.buffer_start]
+    mov [edi+27], eax
+    mov eax, [.buffer_size]
+    mov [edi+31], eax
+    mov dword [edi+35], 0
+    mov dword [edi+39], PAGE_DIR
 
     inc word [task_count]
     cmp byte [.task_state], 0x02
@@ -1052,6 +1256,7 @@ start_task_bg:
     mov [main_task], cx
 .skip:
     mov esp, [kernel_stack]
+    mov byte [.task_state], 0
     sti
 
     int 0x20
@@ -1061,17 +1266,20 @@ start_task_bg:
     and dword [esp+8], 0xfffffffe
     iret
 .too_much_tasks:
+    mov byte [.task_state], 0
     pop ebx
     pop esi
     popa
     or dword [esp+8], 1
     iret
 .error:
+    mov byte [.task_state], 0
     popa
     or dword [esp+8], 1
     xor ah, ah
     iret
 .coff_error:
+    mov byte [.task_state], 0
     pop esi
     popa
     or dword [esp+8], 1
@@ -1079,10 +1287,27 @@ start_task_bg:
     iret
 .program_start: dd 0
 .size: dd 0
+.buffer_start: dd 0     ;address of BSS buffer
+.buffer_size: dd 0      ;size of BSS buffer
+.page_dir: dd 0
 .task_state: db 0       ;foreground / background
 .first_arg: dd 0
 .second_arg: dd 0
 .other_args: dd 0
+
+set_taskflag:
+    ;AX = current PID
+    ;BL = flag
+
+    push edi
+    movzx edi, ax
+    imul edi, TASK_SIZE
+    add edi, tasks_esp
+
+    or byte [edi+35], bl
+    pop edi
+    ret
+
 
 play_wav_file:
     ;EDI = address of file
@@ -1870,6 +2095,11 @@ timer_functions:
 
 ; #### TIME ####
 .get_time:
+    popa
+    push esi
+    push edi
+    push ebp
+
     xor bp, bp
 
     mov dx, 0x70
@@ -1946,14 +2176,21 @@ timer_functions:
 
     mov dx, 0x71
     in al, dx   ;get hour (0 - 23)
+    mov bh, al
     mov bl, al
+    and bl, ~(1 << 7)
 
-    test bl, (1 << 7)
+    cmp bp, 1
+    jne .skip_bcd
+
+    mov al, bl
+    call bcd_convert_byte
+    mov bl, al
+.skip_bcd:
+    test bh, (1 << 7)
     jz .get_month
 
-    and bl, ~(1 << 7)
     add bl, 12
-
     cmp bl, 24
     jne .get_month
 
@@ -1968,6 +2205,11 @@ timer_functions:
     in al, dx   ;get hour (0 - 23)
     mov bl, al
 
+    cmp bp, 1
+    jne .get_month
+
+    call bcd_convert_byte
+    mov bl, al
 .get_month:
     push bx
 
@@ -2041,8 +2283,14 @@ timer_functions:
     pop bx
     mov bh, al
     pop ax
-    cli
-    hlt
+
+    pop ebp
+    pop edi
+    pop esi
+
+    and dword [esp+8], 0xfffffffe
+    iret
+
 .done:
     popa
     and dword [esp+8], 0xfffffffe
@@ -2154,3 +2402,5 @@ get_weekday:
     pop ebx
     ret
 t_table: db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
+
+%include "syscalls/system-bin.asm"

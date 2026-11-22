@@ -45,12 +45,31 @@
 - clears window (fill window in a specific color)
 - EDI: window packet (offset +4B = bgcolor)
 
-## Syscalls
+#### **Output functions for windows, drawn by the window manager**
+<hr>
+> Note: following functions all support UTF-8 characters, but max. 3 Bytes big
 
-1. Program / shell puts into AH function number
-2. passes arguments into other registers
-3. calls syscall via interrupt (e.g. 'int 0x30' for Video)
-4. waits for syscall-exit and stores return value and checks if error happend (carry flag)
+### AH = 0x1A
+- print a null-terminated string into a window, drawn by the window manager
+- ESI: pointer to string
+- EDI: pointer to window packet
+- BX: window ID
+
+### AH = 0x1B
+- print a single char into a window, drawn by the window manager
+- DX: char
+- EDI: poiner to window packet
+- BX: window ID
+
+### AH = 0x1C
+- print newline
+- EDI: pointer to window packet
+- BX: window ID
+
+### AH = 0x1E
+- clear window
+- EDI: pointer to window packet
+- BX: window ID
 
 # INT 0x31
 ## Keyboard
@@ -155,6 +174,13 @@ Delete a window
 - EDI: pointer to window packet
 - BX: window ID
 
+### AH = 0x05
+Get screen geometry
+- output: 
+  - EAX: width
+  - EBX: height
+  - CL: bytes per pixel
+
 ### AH = 0x0A
 Draw a window but let the window manager decide its position and size
 - EBX: foreground color (text color)
@@ -170,6 +196,18 @@ Remove a window, created by the window manager
 - EDI: pointer to window packet
 - BX: window ID
 
+### AH = 0x0E
+Change color and background color in the window packet
+
+- EDI: pointer to window packet
+- BX: window ID
+- ECX: color
+- EDX: background color
+
+### AH = 0x0F
+Redraw all windows, drawn by the window manager
+
+ 
 # INT 0x35
 ## System API
 

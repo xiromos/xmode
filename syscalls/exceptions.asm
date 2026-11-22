@@ -138,10 +138,16 @@ int0xe:
     test ebx, (1 << 0)
     jnz .access_violation
 
-    ; cmp ebx, 0x05
-    ; je .access_violation
-    ; cmp ebx, 0x07
-    ; je .access_violation
+    cmp ebx, 0x05
+    je .access_violation
+    cmp ebx, 0x07
+    je .access_violation
+
+    push eax
+    mov eax, cr3
+    cmp eax, PAGE_DIR
+    jne .map
+    pop eax
 
     mov ebx, 0x1000
     xor ecx, ecx
@@ -160,15 +166,26 @@ int0xe:
     add esp, 4
     iret
 .error:
-    mov ecx, 0x10000
-    mov al, 0xff
-    mov edi, [frame_buffer]
-    rep stosb
-
     mov esi, .error_msg
     call rsod
     cli
     hlt
+
+.map:
+    cmp eax, BIN_PROG_ADDR
+    ja .access_violation
+
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+
+    mov ebx, esi
+    mov eax, cr2
+    mov ecx, 0x1000
+    mov esi, cr3
+    call map_region2
+    jmp .done
+
 .error_msg: db 'Page Access Violation By Task SHELL.SYS', 0
 int_no_err:
     pusha
@@ -286,6 +303,15 @@ irq0_handler:
     add eax, tasks_kernel_stack
 
     mov [tss+4], eax
+
+    mov ebx, [edi+39]
+    mov eax, cr3
+    cmp eax, ebx
+    je .done
+
+    mov eax, ebx
+    mov cr3, eax
+
 .done:
     mov al, 0x20
     out 0x20, al

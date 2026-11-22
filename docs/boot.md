@@ -5,6 +5,7 @@
 - executes the bootloader
 - bootloader loads Root Directory, FAT and searches for KERNEL.BIN
 - if found it gives the file full control and pass some arguments about where the root and data LBA is
+- at the start of the kernel, it also loads the DRIVERS/ directory and following files: (O/U/E/X)HCI.SYS, NVME.SYS, FDC.SYS, SDC.SYS
 
 Then Xiromos Kernel does following things:
 - initializes Video Mode (Mode 0x12, 640x480, 4Bit colors)
@@ -25,6 +26,7 @@ Then Xiromos Kernel does following things:
 - if found it sets that video mode
 - then bootloader opens the root directory and searches for XMODE.BIN
 - if found UEFI loads it to 0x8000
+- it also opens the DRIVERS/ directory and loads (O/U/E/X)HCI.SYS, NVME.SYS, FDC.SYS, SDC.SYS
 - then it asks for memory map from UEFI and copies it to address 0x1ff000
 - bootloader calls ExitBootservices()
 - it passes into registers information about video mode (like address of frame buffer, bytes per pixel,...)
@@ -36,12 +38,10 @@ Then Xiromos Kernel does following things:
 
 - kernel loads IDT (interrupt descriptor table) and remaps PIC (Programmable Interrupt Controller) to 0x20
 - it activates paging in CR0 (identity mapping) and initializes heap memory
-- then it scans PCI for IDE / AHCI / OHCI controller
-- when found AHCI or IDE it calls the 'init' function for them and stores information about all drives in a list
+- also the kernel initializes following tasks: IDLE.SYS (task 0) and SHELL.SYS (task 1)
+- it first scans the PCI for disk controllers and executes the needed drivers
+- then it scans the PCI again, but for other devices and loads a driver for them, but only if the right driver was found in DRVRLIST.TXT
 - after that it takes information from the boot sector about filesystem and calculates Root Directory and Data Area start LBAs
-- kernel loads DRIVERS directory and checks if an OHCI controller was found
-- if yes it searches for /DRIVERS/OHCI.SYS and loads it to 0x61000, executing it if found
-- driver gives kernel information about Open Host Controller so it can set up an IRQ handler for it
-- after registering 1. task (SHELL.SYS) in the task list the kernel performs a switch to User Mode (Ring 3) and executes shell code
 
+This whole process should take ~2-3 seconds. There is a bug where sometimes the kernel just hangs in an infinity loop. Then just restart the VM/PC. <br>
 The operating system is now ready to work and waits for commands.

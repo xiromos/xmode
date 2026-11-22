@@ -154,8 +154,7 @@ no_cmd: db 'Not a known command', 0
 help_msg: db 'Help', 0x0a,
           db 'HELP: show this message', 0x0a,
           db 'CLEAR: clear screen', 0x0a,
-          db 'QUIT: quit program', 0x0a,
-          db 'Press "q" to quit program', 0
+          db 'QUIT: quit program', 0x0a, 0
 
 welcome_msg: db 'Mini-Shell: Type "help" for list of commands', 0x0a, 0
 command_buffer: db 100 dup(0)

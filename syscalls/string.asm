@@ -336,3 +336,20 @@ utf8_string_char:
     inc esi
     mov ax, 1
     ret
+
+string_copy:
+    ;copies null terminated string from ESI to EDI (excluding null terminator)
+    push eax
+    push edi
+    push esi
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    stosb
+    jmp .loop
+.done:
+    pop esi
+    pop edi
+    pop eax
+    ret

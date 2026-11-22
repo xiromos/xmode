@@ -13,6 +13,7 @@
 
 \GRAPHIC
 # Put here graphic drivers
+%1004 $4751 *ATI-RAGE.SYS
 
 \USB
 # Put here USB driver

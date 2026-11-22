@@ -7,6 +7,7 @@
 **pci**: shows all PCI devices<br>
 **usb**: shows all connected USB devices<br>
 **time**: shows current time and date
+**history**: shows last commands
 
 ### Filesystem
 **ls**: list content of current directory<br>

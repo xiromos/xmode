@@ -125,16 +125,17 @@ tasks_esp:
 
 ### One Entry
 
-- 11 Bytes: Taskname (8.3 format)
-- 4  Bytes: Attributes / Flags
-- 4  Bytes: ESP
-- 4  Bytes: startaddress in memory
-- 4  Bytes: size of program
-- 4  Bytes: address to BSS section
-- 4  Bytes: size of BSS section
-- 1  Byte:  Flags2 field, additional flags
-- 2  Bytes: parent task PID
-- 1  Byte:  reserved
+- `11 Bytes:` Taskname (8.3 format)
+- `4  Bytes:` Attributes / Flags
+- `4  Bytes:` ESP
+- `4  Bytes:` startaddress in memory
+- `4  Bytes:` size of program
+- `4  Bytes:` address to BSS section
+- `4  Bytes:` size of BSS section
+- `1  Byte :`  Flags2 field, additional flags
+- `2  Bytes:` parent task PID
+- `1  Byte :`  reserved
+- `4  Bytes:` page directory
 
 ## Valid Flags
 
@@ -142,6 +143,6 @@ tasks_esp:
 **0x0000b100**: sleeping (skip this task)
 
 ### Flags for Flags2 field
-**Bit 1**: windowed task, task operates in windowed mode
-**Bit 2**: program is a binary program
-**Bit 7**: task operates in kernel mode - it cant be killed
+`**Bit 0**`: windowed task, task operates in windowed mode        <br>
+`**Bit 2**`: program is a binary program                          <br>
+`**Bit 7**`: task operates in kernel mode - it cant be killed     <br>

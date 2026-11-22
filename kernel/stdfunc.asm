@@ -19,6 +19,8 @@ print_char:
     pusha
     cmp al, 0x0a
     je .newline
+    cmp al, 0x08
+    je .backspace
 
     call draw_char
     add dword [cur_x], 8
@@ -35,6 +37,12 @@ print_char:
 .done:
     popa
     ret
+.backspace:
+    cmp dword [cur_x], 7
+    jbe .done
+    sub dword [cur_x], 8
+    jmp .done
+
 .scroll:
     call scroll
     mov edx, [real_height]

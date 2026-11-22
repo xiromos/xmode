@@ -10,24 +10,23 @@ It is designed to be compatible with old hardware but at the same time support m
 - BIOS VBE and GOP supported, GOP: choose any available video mode, BIOS: XGA resolution (1024x768)
 - windows / window manager
 - preemptive multitasking
-- task states like 'running', 'sleeping', 'waiting for disk'
 - PCI Busmastering (U)DMA driver for ATA devices
-- multi-disk support (CDISK-Command)
-- OHCI USB Keyboard driver
-- OHCI USB Stick driver
-- COFF program loading (32-Bit)
+- multi-disk support
+- OHCI / UHCI drivers for keyboard and USB Stick
+- support of Win32 COFF files as program format
 - AHCI driver with Native Command Queuing
 - Sound Blaster 16 driver - play any WAV file and listen music
 - PS/2 mouse driver
 - allocating and freeing heap memory via syscalls
 - RTL8139 network card driver
 - system calls for sending UDP and ICMP packets over the internet
+- UTF-8 support (only the first 2048 characters of Unicode)
 
 ## Minimal Hardware Requirements
 
 - Processor: i386
-- RAM: 10MB minimum, ~20MB to load drivers execute shell programs, ~25MB with Window Manager
-- Disk Space: 1MB
+- RAM: ~25MB recommended
+- Disk Space: < 1MB
 
 ## Commands
 
@@ -37,9 +36,9 @@ See docs/commands.md
 
 - SMP
 - APIC support
-- Internet
-- make assembler
-- UHCI and EHCI drivers
+- TCP protocol
+- write assembler and compiler
+- EHCI driver
 
 
 ## How to build
@@ -48,6 +47,9 @@ git clone https://github.com/xiromos/xmode.git
 cd xmode
 chmod +x buildx.sh
 ./buildx.sh
+
+# Note: the build script copies OVMF (Open Virtual Machine Files) from the /usr/share/OVMF/ directory
+# If you dont have OVMF installed, then delete these lines in the build script
 ```
 
 ## Required packages to build

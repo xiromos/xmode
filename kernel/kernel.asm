@@ -271,8 +271,6 @@ main:
 
     call init_rtc
 
-    sti
-
     mov eax, [frame_buffer]
     mov [cur], eax
     mov dword [bgcolor], 0x0014c4be
@@ -314,7 +312,7 @@ main:
 
     ; INIT FIRST TASK (SLOT 0)
     mov edi, tasks_esp
-    cli
+
     ; init idle task
     push edi
     mov esi, idle_task_str
@@ -323,6 +321,8 @@ main:
     pop edi
 
     mov dword [edi+19], 0xfffffffe
+    or byte [edi+35], (1 << 7)      ;set it to kernel mode
+    mov dword [edi+39], PAGE_DIR
 
     mov ebp, esp
     mov esi, [idle_task_stack]
@@ -343,14 +343,17 @@ main:
     mov dword [edi+15], esp
 
     mov esp, ebp
-    sti
 
     inc word [task_count]
     mov edi, tasks_esp
     add edi, TASK_SIZE      ;task 1 - shell
     mov esi, shell_task_str
     mov ecx, 11
+    push edi
     rep movsb
+    pop edi
+    mov dword [edi+39], PAGE_DIR
+    sti
 
     mov ebx, init_system  
     mov esi, program_init_sys
@@ -358,8 +361,10 @@ main:
     int 0x35
 
     call scan_disk_pci
+    call get_drive_partitions
     call search_boot_device
     call get_bpb_data
+
 
     ; mov dl, 6
     ; mov dh, 0x0b
@@ -446,7 +451,6 @@ main:
     call print_newline
 
     call load_configs
-    jc .config_err
 
     mov byte [boot_done], 1
     int 0x20
@@ -495,14 +499,20 @@ main:
     mov ah, 0x01
     int 0x30
     call print_newline
-    ;inc word [task_count]
-    jmp .init_first_task
 
-.config_err:
-    mov esi, configs_load_err
-    mov ebx, COLOR_RED
-    call print_string
-    call print_newline
+    ;init shell history buffer
+    mov ah, 0x0a
+    mov ecx, 0x1000
+    int 0x35
+    mov [get_command.history_buffer], esi
+
+    mov edi, esi
+    mov ecx, 0x1000/4
+    xor eax, eax
+    rep stosd
+
+    ;inc word [task_count]
+
 .init_first_task:
     ; mov edi, tasks_esp
     ; add edi, TASK_SIZE      ;task 1 - shell
@@ -668,6 +678,62 @@ load_fat:
     ret
 
 search_boot_device:
+    pusha
+    mov ah, 0x0a
+    mov ecx, 512
+    int 0x35
+
+    mov edx, 2  ;xor edx, edx
+.loop:
+    cmp dl, [avail_disks]
+    ja .error
+
+    push edx
+    mov dh, 0x0b
+    mov ax, 1
+    mov edi, esi
+    xor ecx, ecx
+    call read_drive
+    pop edx
+    jc .skip
+
+    push esi
+    push edi
+    mov esi, volume_label
+    add edi, 0x2b
+    mov ecx, 11
+    repe cmpsb
+    pop edi
+    pop esi
+    jne .skip
+
+    mov ecx, [volume_id]
+    cmp [edi+0x27], ecx
+    jne .skip
+
+    mov byte [boot_drive], dl
+    mov byte [drive_number], dl
+
+    mov ah, 0x0b
+    mov ecx, 512
+    int 0x35
+    popa
+    ret
+.skip:
+    inc dl
+    jmp .loop
+.error:
+    mov byte [boot_drive], 2
+    mov byte [drive_number], 2
+
+    mov ah, 0x0b
+    mov ecx, 512
+    int 0x35
+    popa
+    ret
+
+get_drive_partitions:
+    ret
     pusha
     mov ah, 0x0a
     mov ecx, 512
@@ -938,7 +1004,6 @@ set_pages:
     PAGES_BASE      equ 0x300000
     PAGE_DIR        equ 0x700000
 
-    cli
     ;clear PAGE_DIR
     mov edi, PAGE_DIR
     xor eax, eax
@@ -993,7 +1058,6 @@ set_pages:
     jnz .fill_page
     ret
 .done:
-    sti
     ret
 
 map_region:
@@ -1656,6 +1720,7 @@ bios_load_drivers:
     mov dl, [drive_number]
     int 0x13
 
+    cld
     mov cx, 8
     mov si, .fat16_str
     mov di, 0x7c00+0x36
@@ -1699,7 +1764,7 @@ bios_load_drivers:
     add ax, word [.reserved_sectors]
     add eax, dword [.hidden_sectors]
 
-    mov word [dap+4], 0x500
+    mov word [dap+4], BIOS_ROOT_ADDR
     mov bx, [.root_sectors]
     mov [dap+2], bx
     mov [dap+8], eax
@@ -1716,8 +1781,13 @@ bios_load_drivers:
     add ax, [.reserved_sectors]
     mov [dap+8], eax
     mov ax, [.fat_size]
+    cmp ax, 43
+    jb .skip
+
+    mov ax, 43
+.skip:
     mov [dap+2], ax
-    mov word [dap+4], 0x4000
+    mov word [dap+4], BIOS_FAT_ADDR
 
     mov ah, 0x42
     mov si, dap
@@ -1729,7 +1799,7 @@ bios_load_drivers:
     call .addr_to_seg_off
     mov di, cx
     mov si, .dir_drivers_str
-    mov ax, 0x500
+    mov ax, BIOS_ROOT_ADDR
     xor dx, dx
     call .load_file
 
@@ -1901,7 +1971,7 @@ bios_load_drivers:
     add [dap+6], ax
 .cluster:
 
-    mov si, 0x4000
+    mov si, BIOS_FAT_ADDR
     mov ax, dx
     shl ax, 1
     add si, ax
@@ -1964,6 +2034,9 @@ bios_load_drivers:
 .root_sectors: dw 0
 .data_start: dd 0
 
+BIOS_FAT_ADDR   equ 0x2500
+BIOS_ROOT_ADDR  equ 0x0500
+
 dap:
     db 0x10
     db 0
@@ -1984,6 +2057,8 @@ bits 32
 %include "drivers/fs16.asm"
 %include "syscalls/string.asm"
 %include "syscalls/system.asm"
+%include "kernel/usb.asm"
+
 font8x16: dd 0
     ;incbin "data/DEFAULT.FNT"
     ;incbin "build/font_ru_RU.fnt"

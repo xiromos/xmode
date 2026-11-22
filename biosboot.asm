@@ -8,7 +8,7 @@
 bits 16
 
 start:
-    jmp main
+    jmp short main
     nop
 
 ;=============FAT16==============================
@@ -40,7 +40,7 @@ start:
 dap:
     db 0x10                         ;size of packet (16 bytes)
     db 0                            ;always 0
-    dw 32                           ;number of sectors to read
+    dw 16                           ;number of sectors to read
     dw 0x0500                       ;offset
     dw 0x0000                       ;segment
     dq 0                            ;LBA
@@ -86,9 +86,6 @@ main:
     mov ax, [RootStartSec]
     add ax, [RootDirSectors]
     mov [DataStartSector], ax
-
-    ;data sectors
-    ;-----------
     
     ;check if BIOS supports EDD
     ;mov ah, 0x41
@@ -113,9 +110,8 @@ main:
     ;jc error
 
 load_root:
-    ;BIOS extended disk read function
     ;load the root directory into memory
-    mov si, dap              ;disk adress packet - expected in SI by int 0x13
+
     call read_sectors
 
     mov dx, [BPB_RootEntry]
@@ -139,28 +135,28 @@ load_FAT:
     call print_start
 
     mov ax, [BPB_FATSz16]
-    ;mov bx, [BPB_NumberOfFATs]
-    ;mul bx
+    cmp ax, 43
+    jbe .skip
+
+    mov ax, 43
+.skip:
     mov [dap+0x02], ax                      ;size in sectors
-    mov [dap+0x04], word 0x3999             ;offset
+    mov [dap+0x04], word 0x2500             ;offset
     mov [dap+0x06], word 0x0000             ;segment
     mov ax, [BPB_ReservedAreaCnt]
     add ax, [BPB_HiddenSectors]
     mov [dap+0x08], ax                      ;LBA - FAT starts after the reserved sectors
-    mov si, dap
     call read_sectors
 load_kernel:
     mov [dap+0x04], word 0x8000
     mov [dap+0x06], word 0x0000
 kernel_loop:
-    mov si, ok_msg
-    call print_start
     mov ax, [cluster]
     call cluster_to_sec         ;get the first sector of the cluster
     mov word [dap+0x08], ax          ;ax = first sector of cluster in data area
     movzx bx, byte [BPB_SectorsPerCluster]
     mov [dap+0x02], bx           ;number of sectors to read
-    mov si, dap
+
     call read_sectors           ;load the cluster into memory
     movzx cx, byte [BPB_SectorsPerCluster]
     mov ax, 512
@@ -172,7 +168,7 @@ kernel_loop:
 .no_overflow:
     mov bx, [cluster]
     shl bx, 1                   ;cluster * 2
-    mov ax, [0x3999+bx]         
+    mov ax, [0x2500+bx]         
     mov [cluster], ax
     cmp ax, 2                   ;compare if its an invalid cluster (0 and 1 are reserved)
     jb error
@@ -189,8 +185,9 @@ loaded:
     mov ax, [DataStartSector]
     mov [0x7e00+4], ax
     jmp 0x0000:0x8000
-halt:                           ;in case the jump fails
-    jmp halt
+
+    cli
+    hlt
 
 print_start:
     mov ah, 0x0e
@@ -212,14 +209,18 @@ error:
 
 cluster_to_sec:
 ;FirstSectorOfCluster = (cluster - 2) * BPB_SectorsPerCluster + DataStartSector
+    push dx
+    xor dx, dx
     sub ax, 2
     movzx cx, byte [BPB_SectorsPerCluster]
     mul cx
     add ax, [DataStartSector]
+    pop dx
     ret
 read_sectors:
     mov ah, 0x42
     mov dl, [BS_DriveNumber]
+    mov si, dap              ;disk adress packet - expected in SI by int 0x13
     int 0x13
     jc error
     ret

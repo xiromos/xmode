@@ -53,3 +53,25 @@ And copy it to disk image:
 ```bash
 mcopy -i build/disk.img test.obj ::TEST.OBJ
 ```
+
+Also there is support for binary programs. Right now it is not recommended to write binary programs because <br>
+of very unstable support and many bugs. <br>
+If you still decide to try, then you have to follow the rules:  <br>
+- The program must have the offset 0x400000
+- The program must include the file bin.dir, or else there are no functions the program can use, because the API doenst work for binary programs <br>
+
+Here is an example:
+```asm
+bits 32
+[org 0x400000]
+
+start:
+    mov esi, welcome_msg
+    mov ebx, 0xffffff
+    call print_string
+
+    call close      ;terminate program
+
+%include "includes/bin.inc"
+welcome_msg: db 'Hello World', 0
+```

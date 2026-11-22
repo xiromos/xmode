@@ -213,6 +213,7 @@ reboot_str: db 'REBOOT', 0
 dhcp_str: db 'DHCP', 0
 time_str: db 'TIME', 0
 history_str: db 'HISTORY', 0
+mkdir_str: db 'MKDIR', 0
 
 command_buffer: db 50 dup(0)
 MAX_HISTORY_ENTRIES     equ 32      ;4096 / (127 + 1 Null Byte) = 32    (used 127B for command length as buffer for later changes)
@@ -734,22 +735,22 @@ main_task: dw 1
 
 tasks_esp:
     times 11 db 0
-    times 7 dd 0    ;task 0 (reserved)
+    times 8 dd 0    ;task 0 (reserved)
 
     times 11 db 0
-    times 7 dd 0    ;task 1 (shell)
+    times 8 dd 0    ;task 1 (shell)
 
     times 11 db 0
-    times 7 dd 0    ;task 2
+    times 8 dd 0    ;task 2
 
     times 11 db 0
-    times 7 dd 0    ;task 3
+    times 8 dd 0    ;task 3
 
     times 11 db 0
-    times 7 dd 0    ;task 4
+    times 8 dd 0    ;task 4
 
     times 11 db 0
-    times 7 dd 0
+    times 8 dd 0
     ;DWORD: Flags
     ;DWORD: ESP
     ;DWORD: Program start address
@@ -759,12 +760,14 @@ tasks_esp:
     ;BYTE: flags 2
     ;WORD: parent task
     ;BYTE: reserved
+    ;DWORD: page directory
 
 tasks_kernel_stack      equ 0x90000
 tasks_kernel_stack_off  equ 0x1000      ;every task has ~4KB stack
-TASK_SIZE               equ 39
+TASK_SIZE               equ 43
 TASK_FLAG_SLEEPING      equ 0x0000b100  ;sleeping flag
 TASK_FLAG2_WIN          equ (1 << 0)    ;windowed task
+TASK_FLAG2_BIN          equ (1 << 2)    ;binary file
 
 task_limit: db 'Maximum amount of tasks achieved!', 0
 create_task_err: db 'Error while creating task', 0

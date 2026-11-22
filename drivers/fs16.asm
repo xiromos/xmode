@@ -1687,6 +1687,8 @@ fs16_zero_partition_drive:
     pop ebx
     pop eax
 
+    movzx ebp, word [esi+0x16]
+
     push eax
     push ecx
     mov edi, esi
@@ -1709,6 +1711,16 @@ fs16_zero_partition_drive:
     inc ecx
     dec ebx
     jnz .loop
+
+    mov word [esi], 0xfff8
+    mov word [esi+2], 0xffff
+
+    mov ecx, 4  ;reserved sectors
+    call write_drive
+
+    add ecx, ebp
+    call write_drive
+
 
     mov ecx, 0x1000
     mov ah, 0x0b
