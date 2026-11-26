@@ -2070,7 +2070,7 @@ ps2_mouse_active: db 0
 drvrlist_addr: dd 0
 drvrlist_filesize: dd 0
 boot_done: db 0
-PIT_DIVISOR     equ 0x2e9c          ;10ms
+PIT_DIVISOR     equ 0x2e9c          ;10ms, 0x4a9 = 1ms
 RTC_DIVISOR     equ 0x06            ;interrupt every 0,976ms
 ;memory map
 ;0x0000 - 0x4000:      root directory

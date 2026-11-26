@@ -698,8 +698,8 @@ exec_cmd:
     mov edi, read_buffer
     mov ebx, [cur_dir_addr]
 
-    mov ecx, read_buffer3
-    mov edx, 0xffffffff     ;second argument is not yet supported
+    mov ecx, read_buffer3   ;first argument
+    mov edx, [cur_dir_addr] ;second argument (current directory)
     mov ebp, 0xffffffff     ;other arguments are not yet supported
 
     mov ah, 0x02

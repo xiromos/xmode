@@ -3,6 +3,9 @@
 ;   AL = 2: start a background task of .bin program                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename
 ;   AL = 3: map a single page                                                                           ;EBX = virtual address, ECX = physical address
 
+;AH = 0x15: general functions for BIN programs
+;   AL = 1: print a string                                                                              ;ESI = pointer to null-terminated string, EBX = color
+
 bin_prog_functions:
     cmp al, 1
     je .bin_start_task
@@ -358,6 +361,9 @@ get_physical_address:
     ;Output: EAX = physical address or CF if the page isnt mapped
     pusha
 
+    mov ecx, eax
+    and ecx, 0xfff
+
     ;get page directory index
     mov edx, eax
     shr edx, 22
@@ -381,6 +387,8 @@ get_physical_address:
 
     mov eax, [ebp]
     and eax, 0xfffff000
+
+    add eax, ecx
     mov [.tmp], eax
 
     popa
@@ -392,3 +400,54 @@ get_physical_address:
     popa
     stc
     ret
+
+
+bin_general_funcs:
+    mov [.reg_a], eax
+    mov eax, cr3
+    mov [.pdir], eax
+    mov eax, PAGE_DIR
+    mov cr3, eax
+    mov eax, [.reg_a]
+
+    cmp al, 1
+    je .print_string
+    cmp al, 3
+    je .print_newline
+
+.error:
+    mov [.reg_a], eax
+    mov eax, [.pdir]
+    mov cr3, eax
+    mov eax, [.reg_a]
+
+    or dword [esp+8], 1
+    iret
+
+.done:
+    mov [.reg_a], eax
+    mov eax, [.pdir]
+    mov cr3, eax
+    mov eax, [.reg_a]
+
+    and dword [esp+8], 0xfffffffe
+    iret
+.pdir: dd 0
+.reg_a: dd 0
+
+.print_string:
+    pusha
+    mov eax, esi
+    mov esi, [.pdir]
+    call get_physical_address
+
+    mov esi, eax
+    call print_string
+    popa
+    jmp .done
+
+.print_newline:
+    pusha
+    call print_newline
+    popa
+    jmp .done

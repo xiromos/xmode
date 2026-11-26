@@ -17,7 +17,7 @@ init_window:
     ;ECX = background color
     ;ESI = *title, max. 17 chars, if ESI = 0: title = 'untitled'
 
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     je .already_init
 
     push eax
@@ -30,10 +30,10 @@ init_window:
     mov [win_fg_color000], ebx
     mov [win_bg_color000], ecx
 
-    mov byte [win_initialized], 1
+    mov byte [win_initialized000], 1
 
-    mov [window_packet], edi
-    mov [win_id], ax
+    mov [window_packet000], edi
+    mov [win_id000], ax
 
     pop edi
     pop eax
@@ -46,7 +46,7 @@ init_window:
 print_string:
     ;ESI = string
     ;EBX = color
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     je .win
 
     push eax
@@ -65,13 +65,13 @@ print_string:
     mov edx, [win_bg_color000]
 
     mov ah, 0x0e
-    mov bx, [win_id]
-    mov edi, [window_packet]
+    mov bx, [win_id000]
+    mov edi, [window_packet000]
     int 0x34
 
     mov ah, 0x1a
-    mov edi, [window_packet]
-    mov bx, [win_id]
+    mov edi, [window_packet000]
+    mov bx, [win_id000]
     int 0x30
 
     mov ecx, [win_fg_color000]
@@ -89,7 +89,7 @@ print_string:
 print_char:
     ;AX = char
     ;EBX = color
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     je .win
 
     push eax
@@ -109,15 +109,15 @@ print_char:
 
     push ax
     mov ah, 0x0e
-    mov bx, [win_id]
-    mov edi, [window_packet]
+    mov bx, [win_id000]
+    mov edi, [window_packet000]
     int 0x34
     pop ax
 
     mov dx, ax
     mov ah, 0x1b
-    mov edi, [window_packet]
-    mov bx, [win_id]
+    mov edi, [window_packet000]
+    mov bx, [win_id000]
     int 0x30
 
     mov ecx, [win_fg_color000]
@@ -133,11 +133,11 @@ print_char:
     ret
 
 print_newline:
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     je .win
 
     push eax
-    mov ah, 0x0c
+    mov ah, 0x03
     int 0x30
     pop eax
     ret
@@ -147,8 +147,8 @@ print_newline:
     push edi
 
     mov ah, 0x1c
-    mov edi, [window_packet]
-    mov bx, [win_id]
+    mov edi, [window_packet000]
+    mov bx, [win_id000]
     int 0x30
 
     pop edi
@@ -157,7 +157,7 @@ print_newline:
     ret
 
 clear_window:
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     jne .error
 
     push eax
@@ -165,8 +165,8 @@ clear_window:
     push edi
 
     mov ah, 0x1e
-    mov edi, [window_packet]
-    mov bx, [win_id]
+    mov edi, [window_packet000]
+    mov bx, [win_id000]
     int 0x30
 
     pop edi
@@ -178,12 +178,12 @@ clear_window:
     ret
 
 end_program:
-    cmp byte [win_initialized], 1
+    cmp byte [win_initialized000], 1
     jne .skip
 
     mov ah, 0x0b
-    mov bx, [win_id]
-    mov edi, [window_packet]
+    mov bx, [win_id000]
+    mov edi, [window_packet000]
     int 0x34
 .skip:
     mov ah, 0x05
@@ -290,8 +290,8 @@ open_file:
 
 end_of_include_file_alhkgjf:
 section .data
-window_packet: dd 0xffffff00
-win_id: dw 0
+window_packet000: dd 0xffffff00
+win_id000: dw 0
 
 COLOR_RED       equ 0xbf0d0d
 COLOR_GREEN     equ 0x12b00c
@@ -299,7 +299,7 @@ COLOR_CYAN      equ 0x0fa0ab
 COLOR_YELLOW    equ 0xede137
 COLOR_BLUE      equ 0x141dba
 
-win_initialized: db 0
+win_initialized000: db 0
 win_fg_color000: dd 0
 win_bg_color000: dd 0
 

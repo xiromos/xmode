@@ -353,3 +353,51 @@ string_copy:
     pop edi
     pop eax
     ret
+
+
+parse_filename:
+    pusha
+    xor ecx, ecx
+.loop:
+    mov al, [esi]
+    cmp al, 0       ;check for 0-terminator
+    je .add_spaces     ;invalid string
+    cmp al, '.'     ;chech for extension
+    je .add_spaces
+    stosb           ;stores al in EDI
+    inc esi
+    inc ecx
+    cmp ecx, 8
+    jnz .loop
+.add_spaces:
+    cmp ecx, 8
+    je .parse_ext
+    mov al, ' '     ;fill the rest of the name with spaces to achieve 8.3 format
+    stosb
+    inc ecx
+    jmp .add_spaces
+.parse_ext:
+    cmp byte [esi], '.'
+    jne .parse_ext_loop
+    inc esi
+.parse_ext_loop:
+    xor ecx, ecx
+.loop2:
+    mov al, [esi]
+    cmp al, 0
+    je .add_spaces_ext
+    stosb
+    inc esi
+    inc ecx
+    cmp ecx, 3
+    jb .loop2
+.add_spaces_ext:
+    cmp ecx, 3
+    je .done
+    mov al, ' '
+    stosb
+    inc ecx
+    jmp .add_spaces_ext
+.done:
+    popa
+    ret

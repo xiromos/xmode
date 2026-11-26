@@ -3,9 +3,11 @@
 ;Syscall for drawing and deleting a window
 ;AH = 0x1: draw a window                        ;input: ESI = X, EDI = Y, ECX = width, EDX = height, EBX = background color, EBP = pointer to title         output: EAX = window ID, EBX = CurX, ECX = CurY
 ;AH = 0x2: remove window                        ;input: EDI = window_packet, bx = window id
+;AH = 0x04: draw a single pixel into custom window     ;input: EDI = window_packet, BX = window ID, ECX = X, EDX = Y, EBP = color (24bit)      output: CF if pixel is out of range
 ;AH = 0x05: get screen geometry                 ;output: EAX = width, EBX = height, CL = bytes per pixel
 ;AH = 0x0A: draw a window but let the window manager control it (recommended)       input: EBX = foreground color (text color), ECX = background color, ESI = pointer to max. 17 byte string (or zero the register, then window is untitled)      output: EDI = pointer to window packet, AX = window ID
 ;AH = 0x0B: remove the window, drawn by the window manager                          input: BX = window ID, EDI = window packet
+;AH = 0x0D: draw a single pixel into a window, drawn by the window manager          input: EDI = window_packet, BX = window ID, ECX = X, EDX = Y, EBP = color (24bit)      output: CF if pixel is out of range
 ;AH = 0x0E: change color and bgcolor in window packet                               input: BX = window ID, ECX = color, EDX = bgcolor, EDI = window packet
 ;AH = 0x0F: redraw all windows
 
@@ -17,12 +19,16 @@ window_functions:
     je .draw_window
     cmp ah, 0x02
     je .rm_window
+    cmp ah, 0x04
+    je wndw_mngr_set_pixel
     cmp ah, 0x05
     je wndw_mngr_get_geometry
     cmp ah, 0x0a
     je wndw_mngr_draw_window
     cmp ah, 0x0b
     je wndw_mngr_rm_window
+    cmp ah, 0x0d
+    je wndw_mngr_set_pixel
     cmp ah, 0x0e
     je wndw_mngr_change_color
     cmp ah, 0x0f
@@ -68,10 +74,15 @@ window_functions:
     int 0x35
 
     movzx eax, word [window_id]
-    imul eax, 8
+    imul eax, WIN_BUFFERLIST2_SIZE
     add eax, win_buffers_list2
     mov [eax], esi
     mov [eax+4], ecx
+
+    push ebp
+    mov bp, [current_task]
+    mov [eax+8], bp
+    pop ebp
 
     mov edi, esi
     
@@ -258,7 +269,7 @@ window_functions:
     mov byte [edi], 0
 
     movzx eax, bx
-    imul eax, 8
+    imul eax, WIN_BUFFERLIST2_SIZE
     add eax, win_buffers_list2
     mov esi, [eax]
     mov ecx, [eax+4]
@@ -323,6 +334,7 @@ max_win_buffers: dw 10
 frame_buffer_copy: dd 0
 num_displayed_win: dw 0     ;number of displayed windows
 WIN_BUFFERLIST_SIZE equ 32
+WIN_BUFFERLIST2_SIZE equ 10
 
 
 wndw_mngr_draw_window:
@@ -1166,6 +1178,63 @@ wndw_mngr_change_color:
     and dword [esp+8], 0xfffffffe
     iret
 
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+
+
+wndw_mngr_set_pixel:
+    pusha
+    cmp ecx, dword [edi+8]
+    ja .error
+    cmp edx, dword [edi+12]
+    ja .error
+
+    cmp ah, 0x0d
+    je .wm_mngr
+
+    movzx eax, bx
+    imul eax, WIN_BUFFERLIST2_SIZE
+    add eax, win_buffers_list2
+
+    mov bx, [current_task]
+    cmp bx, word [eax+8]
+    jne .error
+    jmp .continue
+
+.wm_mngr:
+    movzx esi, bx
+    imul esi, WIN_BUFFERLIST_SIZE
+    add esi, win_buffers_list
+
+    mov ax, [current_task]
+    cmp [esi+12], ax
+    jne .error
+.continue:
+    mov eax, [edi+24]
+    add eax, ecx
+
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+
+    mov esi, [frame_buffer]
+    add esi, eax
+
+    mov eax, [edi+28]
+    add eax, edx
+    imul eax, dword [pitch]
+
+    add esi, eax
+
+    mov eax, ebp
+    mov [esi], ax
+    shr eax, 16
+    mov [esi+2], al
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
 .error:
     popa
     or dword [esp+8], 1

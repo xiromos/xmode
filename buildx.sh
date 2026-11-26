@@ -90,6 +90,7 @@ nasm -f win32 programs/wavplay.asm -o build/wavplay.obj
 nasm -f win32 programs/ping.asm -o build/ping.obj
 nasm -f win32 programs/wmtest.asm -o build/wmtest.obj
 nasm -f win32 programs/install.asm -o build/install.obj
+nasm -f win32 programs/view.asm -o build/view.obj
 
 nasm -f bin programs/hello.asm -o build/hello.bin
 
@@ -115,6 +116,7 @@ mcopy -i build/disk.img build/wavplay.obj ::WAVPLAY.OBJ
 mcopy -i build/disk.img build/ping.obj ::PING.OBJ
 mcopy -i build/disk.img build/wmtest.obj ::WMTEST.OBJ
 mcopy -i build/disk.img build/install.obj ::INSTALL.OBJ
+mcopy -i build/disk.img build/view.obj ::VIEW.OBJ
 
 mcopy -i  build/disk.img sys/ ::SYS
 mattrib -i  build/disk.img +s ::SYS/AUTOSTRT.SYS
@@ -150,6 +152,9 @@ mcopy -i build/disk.img shell/test.sh ::TEST.SH
 mcopy -i build/disk.img build/hello.bin ::HELLO.BIN
 # mcopy -i build/disk.img build/test.wav ::TEST.WAV
 # mcopy -i build/disk.img build/test2.wav ::TEST2.WAV
+# mcopy -i build/disk.img build/field.bmp ::FIELD.BMP
+# mcopy -i build/disk.img build/field2.bmp ::FIELD2.BMP
+# mcopy -i build/disk.img build/field3.bmp ::FIELD3.BMP
 
 mdir -i build/disk.img ::
 cp /usr/share/OVMF/x64/OVMF_VARS.4m.fd ~/Downloads/xmode/build

@@ -30,10 +30,12 @@
 
 ;AH = 0x12: start already loaded task in foreground                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
 ;AH = 0x13: start already loaded task in background                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
-;AH = 0x14: functions for BIN programs
+;AH = 0x14: system functions for BIN programs
 ;   AL = 1: start a foreground task of .bin program                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename
 ;   AL = 2: start a background task of .bin program                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename
 ;   AL = 3: map a single page                                                                           ;EBX = virtual address, ECX = physical address
+;AH = 0x15: general functions for BIN programs
+;   AL = 1: print a string                                                                              ;ESI = pointer to null-terminated string, EBX = color
 
 ;AH = 0x20: functions for playing a WAV file (BH = subfunction)
 ;   BH = 0x01: play WAV file (expects EDI = start address of file)
@@ -71,6 +73,11 @@
 ;       Input: EBX = pointer to 4 Byte field which is incremented by 1 every 1ms, EDX = time in MS after which the timer expires and gets deleted (e.g. if EDX = 500, then the timer gets deleted after 500ms)
 ;   AL = 0x03: get current time
 ;       Output: AL = seconds (0 - 59), AH = minutes (0 - 59), BL = hour (0 - 23), BH = day (1 (monday) - 7 (sunday)), CL = day of month (1 - 31), CH = month (1 - 12), DL = year (0 - 99), DH = century (20)
+;AH = 0x23: security functions
+;   AL = 0x01: encrypt a string via XOR Encryption
+;       Input: ESI = pointer to string, ECX = length of string, EDI = buffer with the size of the string        Output: buffer = encryption key, ESI = pointer to encrypted string
+;   AL = 0x02: decrypt a string via XOR Encryption
+;       Input: ESI = pointer to encrypted string, ECX = length of string, EDI = buffer which contains the encryption key    Output: ESI = pointer to decrypted string
 
 program_sys_handler:
     cmp ah, 0x00
@@ -105,12 +112,16 @@ program_sys_handler:
     je start_task_bg2
     cmp ah, 0x14
     je bin_prog_functions
+    cmp ah, 0x15
+    je bin_general_funcs
     cmp ah, 0x20
     je play_wav_file
     cmp ah, 0x21
     je network_functions
     cmp ah, 0x22
     je timer_functions
+    cmp ah, 0x23
+    je security_functions
 
 .error:
     or dword [esp+8], 1
@@ -2403,4 +2414,92 @@ get_weekday:
     ret
 t_table: db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
 
+
+security_functions:
+    ;AH = 0x23: security functions
+;   AL = 0x01: encrypt a string via XOR Encryption
+;       Input: ESI = pointer to string, ECX = length of string, EDI = buffer with the size of the string        Output: buffer = encryption key
+;   AL = 0x02: decrypt a string via XOR Encryption
+;       Input: ESI = pointer to encrypted string, ECX = length of string, EDI = buffer which contains the encryption key
+
+    pusha
+    cmp al, 1
+    je .encrypt_xor
+    cmp al, 2
+    je .decrypt_xor
+
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+
+.encrypt_xor:
+    cmp ecx, 0
+    je .error
+
+    mov ebp, ecx
+
+    mov ah, 0x22
+    mov al, 3
+    int 0x35
+
+    shl eax, 16
+    mov ax, bx
+
+    mov bx, cx
+    shl ebx, 16
+    mov bx, dx
+
+    mov [.buffer], eax
+    mov [.buffer+4], ebx
+
+    push esi
+    xor ebx, ebx
+    mov ecx, ebp
+    mov esi, .buffer
+.loop_xor1:
+    movsb
+    inc ebx
+    dec ecx
+    jz .encrypt_string
+
+    cmp ebx, 8
+    jb .loop_xor1
+
+    xor ebx, ebx
+    mov esi, .buffer
+    jmp .loop_xor1
+.encrypt_string:
+    sub edi, ebp
+    mov ecx, ebp
+    pop esi
+
+.loop_xor2:
+    mov al, [esi]
+    mov bl, [edi]
+    xor al, bl
+
+    mov [esi], al
+    inc esi
+    inc edi
+    dec ecx
+    jnz .loop_xor2
+    jmp .done
+    
+.decrypt_xor:
+    mov al, [esi]
+    mov bl, [edi]
+    xor al, bl
+    mov [esi], al
+    inc edi
+    inc esi
+    dec ecx
+    jnz .decrypt_xor
+    jmp .done
+.done:
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.buffer: times 8 db 0
 %include "syscalls/system-bin.asm"
